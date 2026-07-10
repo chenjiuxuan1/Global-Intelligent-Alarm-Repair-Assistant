@@ -1,0 +1,227 @@
+{
+  "name": "智能告警修复-墨西哥-统一平台模板",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "a65c1eff-53ee-4e6f-8572-14a2f274d55b",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        80,
+        272
+      ],
+      "id": "ea2ac786-9acb-444e-9a82-27c3940368bf",
+      "name": "Webhook",
+      "webhookId": "a65c1eff-53ee-4e6f-8572-14a2f274d55b"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@172.20.220.165 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'mx'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' DS_ENVIRONMENT_CODE='\"'\"'12813621425120'\"'\"' DS_TENANT_CODE='\"'\"'dolphinscheduler'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_BOT_ID='\"'\"'163ad872-4b4d-4493-8ec7-838f8eb9848d'\"'\"' TV_MENTIONS='\"'\"'kuiwu@kn.group,enzodeng@kn.group'\"'\"' python3 core/repair_strict_7step.py'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        448,
+        272
+      ],
+      "id": "5167b329-36f6-4534-8446-71e2cf959a34",
+      "name": "智能修复",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "7oQDoS8H2buTjr7H",
+          "name": "墨西哥跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@172.20.220.165 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && git fetch origin && git reset --hard origin/master'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -16
+      ],
+      "id": "db81f8af-7c17-4247-8d16-3dda5fe74e63",
+      "name": "拉取最新代码",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "7oQDoS8H2buTjr7H",
+          "name": "墨西哥跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@172.20.220.165 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'mx'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' DS_ENVIRONMENT_CODE='\"'\"'12813621425120'\"'\"' DS_TENANT_CODE='\"'\"'dolphinscheduler'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_BOT_ID='\"'\"'163ad872-4b4d-4493-8ec7-838f8eb9848d'\"'\"' TV_MENTIONS='\"'\"'kuiwu@kn.group,enzodeng@kn.group'\"'\"' python3 core/repair_strict_7step.py'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        608,
+        -16
+      ],
+      "id": "e59feefd-d342-46fd-9909-4d87b3c44ec7",
+      "name": "智能修复1",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "7oQDoS8H2buTjr7H",
+          "name": "墨西哥跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        32,
+        -16
+      ],
+      "id": "675f65b0-8f47-42f5-968a-98182f4e6f21",
+      "name": "手动触发"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@172.20.220.165 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'mx'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' DS_ENVIRONMENT_CODE='\"'\"'12813621425120'\"'\"' DS_TENANT_CODE='\"'\"'dolphinscheduler'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_BOT_ID='\"'\"'163ad872-4b4d-4493-8ec7-838f8eb9848d'\"'\"' TV_MENTIONS='\"'\"'kuiwu@kn.group,enzodeng@kn.group'\"'\"' python3 tools/task_execution_checker.py --task repair'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        400,
+        -16
+      ],
+      "id": "9a6488d6-4d9b-4118-ba9c-3f3294bba9ca",
+      "name": "环境检测",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "7oQDoS8H2buTjr7H",
+          "name": "墨西哥跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@172.20.220.165 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'mx'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' DS_ENVIRONMENT_CODE='\"'\"'12813621425120'\"'\"' DS_TENANT_CODE='\"'\"'dolphinscheduler'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_BOT_ID='\"'\"'163ad872-4b4d-4493-8ec7-838f8eb9848d'\"'\"' TV_MENTIONS='\"'\"'kuiwu@kn.group,enzodeng@kn.group'\"'\"' python3 tools/task_execution_checker.py --task repair'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        256,
+        272
+      ],
+      "id": "3f1ce19d-82ba-45c4-ba02-726e0f01fb7f",
+      "name": "执行环境检测",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "7oQDoS8H2buTjr7H",
+          "name": "墨西哥跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@172.20.220.165 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'mx'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' DS_ENVIRONMENT_CODE='\"'\"'12813621425120'\"'\"' DS_TENANT_CODE='\"'\"'dolphinscheduler'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_BOT_ID='\"'\"'163ad872-4b4d-4493-8ec7-838f8eb9848d'\"'\"' TV_MENTIONS='\"'\"'kuiwu@kn.group,enzodeng@kn.group'\"'\"' python3 tools/probe_ds_api_mode.py --instance-id ${DS_PROBE_INSTANCE_ID}'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        720,
+        128
+      ],
+      "id": "589eb297-711c-4b88-9a83-8800bf39637f",
+      "name": "智能修复2",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "7oQDoS8H2buTjr7H",
+          "name": "墨西哥跳板机"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "执行环境检测",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "拉取最新代码": {
+      "main": [
+        [
+          {
+            "node": "环境检测",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "手动触发": {
+      "main": [
+        [
+          {
+            "node": "拉取最新代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "环境检测": {
+      "main": [
+        [
+          {
+            "node": "智能修复1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "执行环境检测": {
+      "main": [
+        [
+          {
+            "node": "智能修复",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "092ba29a-9cf6-49a8-ac17-75b0e108af27",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9b8dca2625dfded9c94218816984fe8bf5bd91d03aaffc5e971fd46b2e9dc2e8",
+    "platformTemplate": true,
+    "sourceWorkflowName": "智能告警修复-墨西哥",
+    "platformCountry": "mx",
+    "platformRepo": "/root/Global-Intelligent-Alarm-Repair-Assistant"
+  },
+  "id": "AEvycwn8gWdP7S4K",
+  "tags": []
+}

@@ -1,0 +1,207 @@
+{
+  "name": "智能告警修复-菲律宾-统一平台模板",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "caf4deab-c72b-413c-adb8-72a5638db5ca",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        48,
+        320
+      ],
+      "id": "433a850b-fcc3-4c30-a424-1d1e427553f6",
+      "name": "Webhook",
+      "webhookId": "caf4deab-c72b-413c-adb8-72a5638db5ca"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh root@10.20.10.12 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' python3 core/repair_strict_7step.py'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        416,
+        320
+      ],
+      "id": "76e4baed-00a1-43ac-963e-23bcf35ef3c7",
+      "name": "智能修复",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "MQWXoKIQxg8ae2Nt",
+          "name": "菲律宾跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh root@10.20.10.12 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && git fetch origin && git reset --hard origin/master'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -16
+      ],
+      "id": "962af523-9477-4461-909b-262eb9e1e4f1",
+      "name": "拉取最新代码",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "MQWXoKIQxg8ae2Nt",
+          "name": "菲律宾跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh root@10.20.10.12 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' python3 core/repair_strict_7step.py'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        608,
+        -16
+      ],
+      "id": "39b61f43-ef0a-428a-8c78-a849a49e3ca1",
+      "name": "智能修复1",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "MQWXoKIQxg8ae2Nt",
+          "name": "菲律宾跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        32,
+        -16
+      ],
+      "id": "ca031a7e-b071-4a37-8978-614168365b33",
+      "name": "手动触发"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh root@10.20.10.12 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' python3 tools/task_execution_checker.py --task repair'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        400,
+        -16
+      ],
+      "id": "e30d531e-8dab-4a39-b987-272d17eaa27c",
+      "name": "环境检测",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "MQWXoKIQxg8ae2Nt",
+          "name": "菲律宾跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh root@10.20.10.12 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' python3 tools/task_execution_checker.py --task repair'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        240,
+        320
+      ],
+      "id": "b44fd6df-c266-4c6b-ba1b-d9920af92adf",
+      "name": "执行环境检测",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "MQWXoKIQxg8ae2Nt",
+          "name": "菲律宾跳板机"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "执行环境检测",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "拉取最新代码": {
+      "main": [
+        [
+          {
+            "node": "环境检测",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "手动触发": {
+      "main": [
+        [
+          {
+            "node": "拉取最新代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "环境检测": {
+      "main": [
+        [
+          {
+            "node": "智能修复1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "执行环境检测": {
+      "main": [
+        [
+          {
+            "node": "智能修复",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "30250474-7548-424c-ab3f-630a54eb7aec",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9b8dca2625dfded9c94218816984fe8bf5bd91d03aaffc5e971fd46b2e9dc2e8",
+    "platformTemplate": true,
+    "sourceWorkflowName": "智能告警修复-菲律宾",
+    "platformCountry": "ph",
+    "platformRepo": "/root/Global-Intelligent-Alarm-Repair-Assistant"
+  },
+  "id": "cIDh1Jc47QpuAxmZ",
+  "tags": []
+}

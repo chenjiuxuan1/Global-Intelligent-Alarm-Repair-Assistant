@@ -27,6 +27,7 @@ Covered main-path scripts:
 - `alert/alert_bridge.py`
 - `alert/send_alert.py`
 - `dolphinscheduler/run_fuyan_workflows.py`
+- generated n8n workflow templates under `deploy/n8n/templates/`
 
 Country differences live in:
 
@@ -75,8 +76,12 @@ For each country:
 
 1. Copy `config/country_profiles/<country>.env.example` to `.env.local` or the deployment secret store.
 2. Fill real DS, DB, OpenClaw, TV, and workflow values.
-3. Run `APP_COUNTRY=<country> python3 tests/country_config_checks.py`.
-4. Run `APP_COUNTRY=<country> python3 -m unittest tests.repair_strict_7step_checks tests.send_tv_report_checks -v`.
-5. Run `APP_COUNTRY=<country> python3 core/send_tv_report.py --test`.
-6. Run the repair flow in a controlled window.
-7. Compare output with the old country repository before switching cron or DS triggers.
+3. Deploy the platform repo to the current country host as `/root/Global-Intelligent-Alarm-Repair-Assistant`.
+4. Import the matching template from `deploy/n8n/templates/`.
+5. Run `APP_COUNTRY=<country> python3 tests/country_config_checks.py`.
+6. Run `APP_COUNTRY=<country> python3 -m unittest tests.repair_strict_7step_checks tests.send_tv_report_checks -v`.
+7. Run `APP_COUNTRY=<country> python3 core/send_tv_report.py --test`.
+8. Run the repair flow in a controlled window.
+9. Compare output with the old country repository before switching cron or DS triggers.
+
+See `docs/current-country-effect-parity.md` for the exact current n8n behavior preserved by the platform templates.

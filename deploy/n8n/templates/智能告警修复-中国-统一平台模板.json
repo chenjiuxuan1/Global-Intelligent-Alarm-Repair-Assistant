@@ -1,0 +1,305 @@
+{
+  "name": "智能告警修复-中国-统一平台模板",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ds-quality-alert1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        1088,
+        32
+      ],
+      "id": "138c8e9e-53e2-4947-89c2-d5a10488ece1",
+      "name": "Webhook",
+      "webhookId": "48ac7a29-a2b6-4467-a1d1-f739564eb8af"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        1088,
+        160
+      ],
+      "id": "9b128066-b4fe-4ad0-a376-cd4ee416fc96",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@10.20.47.14 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'cn'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' DS_BASE_URL='\"'\"'http://10.20.47.14:12345/dolphinscheduler'\"'\"' DB_HOST='\"'\"'rm-uf60amp9vz996n520.mysql.rds.aliyuncs.com'\"'\"' DB_PORT='\"'\"'3306'\"'\"' DB_USER='\"'\"'e_ds'\"'\"' DB_NAME='\"'\"'wattrel'\"'\"' TV_MENTIONS='\"'\"'owenzhang@kn.group,rockyzong@kn.group'\"'\"' python3 tools/task_execution_checker.py --task repair'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1536,
+        32
+      ],
+      "id": "3ff3b793-d66e-49e5-9ad8-fa0a0593e741",
+      "name": "环境检测",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "wGL20YUQ7ZpN1xRA",
+          "name": "中国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@10.20.47.14 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'cn'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' DS_BASE_URL='\"'\"'http://10.20.47.14:12345/dolphinscheduler'\"'\"' DB_HOST='\"'\"'rm-uf60amp9vz996n520.mysql.rds.aliyuncs.com'\"'\"' DB_PORT='\"'\"'3306'\"'\"' DB_USER='\"'\"'e_ds'\"'\"' DB_NAME='\"'\"'wattrel'\"'\"' TV_MENTIONS='\"'\"'owenzhang@kn.group,rockyzong@kn.group'\"'\"' python3 core/repair_strict_7step.py'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1712,
+        32
+      ],
+      "id": "c826ca0d-9c38-4522-940f-2fbf95b5c7aa",
+      "name": "智能修复",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "wGL20YUQ7ZpN1xRA",
+          "name": "中国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@10.20.47.14 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && GIT_SSH_COMMAND='\"'\"'ssh -i /root/.ssh/cn_repo_deploy_key -o IdentitiesOnly=yes'\"'\"' git pull origin master'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1328,
+        128
+      ],
+      "id": "11307c97-01f6-40fe-b276-2e5b42f24dc7",
+      "name": "拉取最新代码",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "wGL20YUQ7ZpN1xRA",
+          "name": "中国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@10.20.47.14 \"cd /tmp && rm -rf starrocks-pl-monitor-tv-alert-main starrocks-pl-monitor-tv-alert-main.tar.gz && curl -L --retry 3 --retry-delay 2 -o starrocks-pl-monitor-tv-alert-main.tar.gz https://github.com/chenjiuxuan1/starrocks-pl-monitor-tv-alert/archive/refs/heads/main.tar.gz && tar -xzf starrocks-pl-monitor-tv-alert-main.tar.gz && rm -rf /root/starrocks-pl-monitor-tv-alert && mkdir -p /root/starrocks-pl-monitor-tv-alert && cp -rf /tmp/starrocks-pl-monitor-tv-alert-main/. /root/starrocks-pl-monitor-tv-alert/\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1376,
+        304
+      ],
+      "id": "413474f9-f5a3-4f19-8ffc-0391276d6897",
+      "name": "PL告警代码拉取",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "wGL20YUQ7ZpN1xRA",
+          "name": "中国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@10.20.47.14 \"cd /root/starrocks-pl-monitor-tv-alert && python3 alert/run_alert.py --alert pl_monitor --sr-password ${SECRET} --sr-backup-password ${SECRET} --bot-id '4d0bcc9b-71bf-41c5-ba9f-89b7278f9214'\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1552,
+        304
+      ],
+      "id": "f7668efa-c8bd-455b-97ff-93b7141269fd",
+      "name": "PL告警触发",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "wGL20YUQ7ZpN1xRA",
+          "name": "中国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@10.20.47.14 \"cd /root/starrocks-pl-monitor-tv-alert && python3 alert/run_alert.py --alert pl_monitor --sr-password ${SECRET} --sr-backup-password ${SECRET}\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1344,
+        528
+      ],
+      "id": "933771d7-2d3c-4bf3-bd16-a2cb141c3465",
+      "name": "PL告警触发1",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "wGL20YUQ7ZpN1xRA",
+          "name": "中国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "PL_ZNGJ",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        1072,
+        528
+      ],
+      "id": "b26a3ed9-7d8f-482d-bcfc-107dce63d32d",
+      "name": "Webhook1",
+      "webhookId": "48ac7a29-a2b6-4467-a1d1-f739564eb8af"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "CWSJJY",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        1072,
+        704
+      ],
+      "id": "5fc691c7-ea26-4da7-9662-ac076969b3d4",
+      "name": "Webhook2",
+      "webhookId": "48ac7a29-a2b6-4467-a1d1-f739564eb8af"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@10.20.47.14 \"cd /root/starrocks-pl-monitor-tv-alert && python3 alert/run_alert.py --alert fin_ods_quality --sr-password ${SECRET} --sr-backup-password ${SECRET} --mentions 'adamyu@kn.group,gretchenhe@kn.group'\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1344,
+        704
+      ],
+      "id": "84e82045-8364-4cf6-ae3b-1e74d4f1b062",
+      "name": "PL告警触发2",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "wGL20YUQ7ZpN1xRA",
+          "name": "中国跳板机"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "环境检测",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "拉取最新代码",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PL告警代码拉取",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "环境检测": {
+      "main": [
+        [
+          {
+            "node": "智能修复",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "拉取最新代码": {
+      "main": [
+        [
+          {
+            "node": "环境检测",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PL告警代码拉取": {
+      "main": [
+        [
+          {
+            "node": "PL告警触发",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook1": {
+      "main": [
+        [
+          {
+            "node": "PL告警触发1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook2": {
+      "main": [
+        [
+          {
+            "node": "PL告警触发2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "a37ed406-f1f0-48ba-810c-a9addf310654",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9b8dca2625dfded9c94218816984fe8bf5bd91d03aaffc5e971fd46b2e9dc2e8",
+    "platformTemplate": true,
+    "sourceWorkflowName": "智能告警修复-中国",
+    "platformCountry": "cn",
+    "platformRepo": "/root/Global-Intelligent-Alarm-Repair-Assistant"
+  },
+  "id": "O2Ppfn5GgtAJVKsD",
+  "tags": []
+}

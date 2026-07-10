@@ -1,0 +1,226 @@
+{
+  "name": "智能告警修复-印尼-统一平台模板",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ds-quality-alert",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        80,
+        272
+      ],
+      "id": "0359a2e7-9a1d-455f-8ad3-7a0de4de8d0b",
+      "name": "Webhook",
+      "webhookId": "48ac7a29-a2b6-4467-a1d1-f739564eb8af"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@192.168.21.236 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ine'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_MENTIONS='\"'\"'gretchenhe@kn.group,riverzhai@kn.group'\"'\"' python3 core/repair_strict_7step.py'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        480,
+        272
+      ],
+      "id": "5e25a7d9-26dc-432e-9140-1293d7ff570d",
+      "name": "智能修复",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SyHW5nXUCnuULr2c",
+          "name": "印尼跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@192.168.21.236 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && git fetch origin && git reset --hard origin/master'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -16
+      ],
+      "id": "3d4535ba-b29f-4e9b-8aa4-8d10a723489d",
+      "name": "拉取最新代码",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SyHW5nXUCnuULr2c",
+          "name": "印尼跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@192.168.21.236 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ine'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_MENTIONS='\"'\"'gretchenhe@kn.group,riverzhai@kn.group'\"'\"' python3 core/repair_strict_7step.py'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        608,
+        -16
+      ],
+      "id": "8d828712-8f34-4839-b5fa-053301147cd0",
+      "name": "智能修复1",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SyHW5nXUCnuULr2c",
+          "name": "印尼跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        32,
+        -16
+      ],
+      "id": "2e9c4592-3db2-4d60-8a40-be8841b39881",
+      "name": "手动触发"
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@192.168.21.236 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ine'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_MENTIONS='\"'\"'gretchenhe@kn.group,riverzhai@kn.group'\"'\"' python3 tools/task_execution_checker.py --task repair'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        400,
+        -16
+      ],
+      "id": "d08a884c-adb9-4a22-98a6-9e5eecc68a92",
+      "name": "环境检测",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SyHW5nXUCnuULr2c",
+          "name": "印尼跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@192.168.21.236 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ine'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_MENTIONS='\"'\"'gretchenhe@kn.group,riverzhai@kn.group'\"'\"' python3 tools/task_execution_checker.py --task repair'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        272,
+        272
+      ],
+      "id": "5c2f5387-a6b0-43d0-acd2-a1af9c4d2b9b",
+      "name": "执行环境检测",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SyHW5nXUCnuULr2c",
+          "name": "印尼跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh -p 36000 root@192.168.21.236 \"cd /root/INE-Intelligent-Alarm-Repair-Assistant && BASE=\\$(python3 -c 'from config import auto_load_env; from config.config import DS_CONFIG; print(DS_CONFIG[\\\"base_url\\\"].rstrip(\\\"/\\\"))') && TOKEN=\\$(python3 -c 'from config import auto_load_env; from config.config import DS_CONFIG; print(DS_CONFIG[\\\"token\\\"])') && PROJECT=\\$(python3 -c 'from config import auto_load_env; from config.config import DS_CONFIG; print(DS_CONFIG[\\\"project_code\\\"])') && curl -s \\\"\\$BASE/projects/\\$PROJECT/workflow-instances?pageNo=1&pageSize=200&stateType=ALL\\\" -H \\\"token: ${SECRET}\" | python3 -c 'import sys,json; data=json.load(sys.stdin); items=data.get(\\\"data\\\",{}).get(\\\"totalList\\\",[]); hits=[x for x in items if str(x.get(\\\"workflowDefinitionCode\\\"))==\\\"13056261892672\\\"]; print(json.dumps(hits, ensure_ascii=False, indent=2))'\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        720,
+        160
+      ],
+      "id": "ea2f0fee-95b4-4d4e-8ea0-8fb29d77dd80",
+      "name": "智能修复2",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SyHW5nXUCnuULr2c",
+          "name": "印尼跳板机"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "执行环境检测",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "拉取最新代码": {
+      "main": [
+        [
+          {
+            "node": "环境检测",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "手动触发": {
+      "main": [
+        [
+          {
+            "node": "拉取最新代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "环境检测": {
+      "main": [
+        [
+          {
+            "node": "智能修复1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "执行环境检测": {
+      "main": [
+        [
+          {
+            "node": "智能修复",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "497e61d5-ca9e-405b-af14-06f573dbb35a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9b8dca2625dfded9c94218816984fe8bf5bd91d03aaffc5e971fd46b2e9dc2e8",
+    "platformTemplate": true,
+    "sourceWorkflowName": "智能告警修复-印尼",
+    "platformCountry": "ine",
+    "platformRepo": "/root/Global-Intelligent-Alarm-Repair-Assistant"
+  },
+  "id": "XiDTOGuTsiTGFCWS",
+  "tags": []
+}
