@@ -52,6 +52,9 @@ sql_export/
 .openclaw/
 workspace-state.json
 
+# n8n templates with inline production secrets
+deploy/n8n/templates-with-secrets/
+
 # 个人化文档（由用户本地维护）
 AGENTS.md
 SOUL.md
