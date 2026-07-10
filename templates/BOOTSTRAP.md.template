@@ -1,0 +1,75 @@
+# BOOTSTRAP.md - 首次启动配置
+
+**用途**: 首次启动时的初始化指引
+**使用方法**: 按照以下步骤完成初始化，然后**删除此文件**
+
+---
+
+## 初始化步骤
+
+### 步骤1: 创建个人化文档
+
+复制模板文件并填写：
+```bash
+cp AGENTS.md.template AGENTS.md
+cp SOUL.md.template SOUL.md
+cp USER.md.template USER.md
+cp TOOLS.md.template TOOLS.md
+cp IDENTITY.md.template IDENTITY.md
+```
+
+### 步骤2: 配置环境变量
+
+编辑 `~/.bashrc`，添加：
+```bash
+# DolphinScheduler
+export DS_TOKEN='your_ds_token_here'
+
+# 数据库
+export DB_PASSWORD='your_db_password_here'
+export DB_HOST='172.20.0.235'
+export DB_PORT='13306'
+export DB_USER='e_ds'
+export DB_NAME='wattrel'
+```
+
+然后执行：
+```bash
+source ~/.bashrc
+```
+
+### 步骤3: 验证配置
+
+```bash
+python3 task_execution_checker.py --task all
+```
+
+### 步骤4: 测试定时任务脚本
+
+```bash
+# 测试异常调度检测
+python3 auto_stop_abnormal_schedule.py
+
+# 测试智能告警修复（可选）
+python3 repair_strict_7step.py
+```
+
+### 步骤5: 删除此文件
+
+初始化完成后，删除此文件：
+```bash
+rm BOOTSTRAP.md
+```
+
+---
+
+## 完成
+
+初始化完成后，你将拥有：
+- ✅ 个人化的身份定义
+- ✅ 完整的工具配置
+- ✅ 可运行的定时任务
+
+---
+
+**注意**: 此文件仅在首次启动时需要，完成后请删除。
