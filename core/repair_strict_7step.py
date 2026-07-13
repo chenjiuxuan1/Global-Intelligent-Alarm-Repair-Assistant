@@ -68,6 +68,8 @@ DS_API_GET_TIMEOUT_SECONDS = int(os.environ.get('DS_API_GET_TIMEOUT_SECONDS', '1
 DS_API_GET_RETRY_COUNT = int(os.environ.get('DS_API_GET_RETRY_COUNT', os.environ.get('DS_API_RETRY_COUNT', '1')))
 DS_WORKFLOW_LIST_PAGE_SIZE = int(os.environ.get('DS_WORKFLOW_LIST_PAGE_SIZE', '100'))
 DS_WORKFLOW_LIST_MAX_SECONDS = int(os.environ.get('DS_WORKFLOW_LIST_MAX_SECONDS', '0'))
+DS_PRIORITY_WORKFLOW_MAX_SECONDS = int(os.environ.get('DS_PRIORITY_WORKFLOW_MAX_SECONDS', '0'))
+WORKFLOW_DETAIL_CACHE = {}
 
 # 维护任务关键词（排除）
 MAINTENANCE_KEYWORDS = ['补充', '删除', '清理', '修复', '历史', '冗余', '临时', 'test', 'copy', '手插入']
@@ -347,14 +349,22 @@ def _get_instance_state_types_for_search(include_all=False):
 def get_workflow_definition_detail(workflow_code, project_code=None):
     """兼容 DS 3.3 workflow-definition 与 DS 3.2 process-definition 详情接口"""
     project_code = project_code or PROJECT_CODE
+    cache_key = (str(project_code), str(workflow_code))
+    if cache_key in WORKFLOW_DETAIL_CACHE:
+        return WORKFLOW_DETAIL_CACHE[cache_key]
+
     endpoints = _get_definition_detail_endpoints(project_code, workflow_code)
     last_msg = ""
     for endpoint in endpoints:
         success, detail, msg = ds_api_get(endpoint)
         if success:
-            return True, detail, msg
+            result = (True, detail, msg)
+            WORKFLOW_DETAIL_CACHE[cache_key] = result
+            return result
         last_msg = msg
-    return False, {}, last_msg
+    result = (False, {}, last_msg)
+    WORKFLOW_DETAIL_CACHE[cache_key] = result
+    return result
 
 
 def get_workflow_name_from_detail(detail):
@@ -1623,7 +1633,16 @@ def step2_find_locations(alerts):
         blocked_location = None
         forbidden_location = None
         # 先在优先工作流中搜索
+        priority_started_at = time.time()
+        priority_budget_exceeded = False
         for wf_code, wf_name in priority_workflows:
+            if (
+                DS_PRIORITY_WORKFLOW_MAX_SECONDS > 0
+                and (time.time() - priority_started_at) >= DS_PRIORITY_WORKFLOW_MAX_SECONDS
+            ):
+                priority_budget_exceeded = True
+                log(f"  ⏭️ 优先工作流搜索超过{DS_PRIORITY_WORKFLOW_MAX_SECONDS}秒预算，停止继续尝试")
+                break
             for search_table in search_tables:
                 result = step2_search_in_workflow(wf_code, search_table)
                 if not result:
@@ -1652,7 +1671,10 @@ def step2_find_locations(alerts):
         # 如果没找到，再搜索所有工作流（使用缓存）
         if not location:
             if all_workflows is None:
-                log(f"  在优先工作流中未找到，获取所有工作流列表...")
+                if priority_budget_exceeded:
+                    log(f"  优先工作流未在预算内命中，获取所有工作流列表...")
+                else:
+                    log(f"  在优先工作流中未找到，获取所有工作流列表...")
                 success, data, msg = get_workflow_definition_list()
                 if success:
                     all_workflows = data.get('totalList', [])

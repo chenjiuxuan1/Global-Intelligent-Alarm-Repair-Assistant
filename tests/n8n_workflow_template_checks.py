@@ -57,7 +57,7 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                         self.assertIn("master.tar.gz", command)
                         self.assertIn("curl -L", command)
                         self.assertIn("tar -xzf", command)
-                        self.assertIn("跳过压缩包初始化", command)
+                        self.assertIn("开始通过压缩包同步代码", command)
                         self.assertNotIn("git clone https://", command)
                     else:
                         self.assertIn("git clone", command)
@@ -123,6 +123,8 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
             self.assertIn("'20'", command)
             self.assertIn("DS_WORKFLOW_LIST_MAX_SECONDS=", command)
             self.assertIn("'30'", command)
+            self.assertIn("DS_PRIORITY_WORKFLOW_MAX_SECONDS=", command)
+            self.assertIn("'20'", command)
             self.assertIn("PRIORITY_WORKFLOW_CODES_JSON=", command)
             self.assertIn("158514956979200", command)
             self.assertIn("158514957494272", command)

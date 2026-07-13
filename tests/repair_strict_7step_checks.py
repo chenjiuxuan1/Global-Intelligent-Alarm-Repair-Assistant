@@ -3188,6 +3188,53 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn("超过30秒预算", msg)
 
+    def test_step2_reuses_workflow_detail_failure_across_alerts(self):
+        module = load_module()
+        module.PRIORITY_WORKFLOWS = [("wf-priority", "PRIORITY")]
+        alerts = [
+            {"id": 1, "table": "dwd_table_a", "dt": "2026-07-13", "diff": 1},
+            {"id": 2, "table": "dwd_table_b", "dt": "2026-07-13", "diff": 1},
+        ]
+        calls = []
+
+        def fake_ds_api_get(endpoint):
+            calls.append(endpoint)
+            return False, {}, "<urlopen error timed out>"
+
+        with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get), \
+            mock.patch.object(module, "get_workflow_definition_list", return_value=(False, {}, "<urlopen error timed out>")), \
+            mock.patch.object(module, "log"):
+            tasks = module.step2_find_locations(alerts)
+
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(
+            calls,
+            [
+                "/projects/default-project/workflow-definition/wf-priority",
+                "/projects/default-project/process-definition/wf-priority",
+            ],
+        )
+
+    def test_step2_priority_search_stops_after_configured_budget(self):
+        module = load_module()
+        module.PRIORITY_WORKFLOWS = [("wf-a", "A"), ("wf-b", "B")]
+        module.DS_PRIORITY_WORKFLOW_MAX_SECONDS = 5
+        alerts = [{"id": 1, "table": "dwd_table_a", "dt": "2026-07-13", "diff": 1}]
+        searched_codes = []
+        ticks = iter([0, 0, 6])
+
+        def fake_search(workflow_code, table_name):
+            searched_codes.append(workflow_code)
+            return None
+
+        with mock.patch.object(module, "step2_search_in_workflow", side_effect=fake_search), \
+            mock.patch.object(module.time, "time", side_effect=lambda: next(ticks)), \
+            mock.patch.object(module, "get_workflow_definition_list", return_value=(False, {}, "skipped")), \
+            mock.patch.object(module, "log"):
+            module.step2_find_locations(alerts)
+
+        self.assertEqual(searched_codes, ["wf-a"])
+
     def test_ds_api_get_retries_timeout_errors(self):
         module = load_module()
         module.DS_API_GET_TIMEOUT_SECONDS = 30

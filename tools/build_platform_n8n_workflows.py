@@ -39,6 +39,7 @@ COUNTRIES = {
             "DS_API_GET_RETRY_COUNT": "1",
             "DS_WORKFLOW_LIST_PAGE_SIZE": "20",
             "DS_WORKFLOW_LIST_MAX_SECONDS": "30",
+            "DS_PRIORITY_WORKFLOW_MAX_SECONDS": "20",
             "DB_HOST": "rm-uf60amp9vz996n520.mysql.rds.aliyuncs.com",
             "DB_PORT": "3306",
             "DB_USER": "e_ds",
@@ -169,11 +170,11 @@ def ensure_platform_repo_command(update=False, country=None):
     if country == "cn":
         archive = shell_quote(PLATFORM_REPO_ARCHIVE_URL)
         archive_path = shell_quote("/tmp/global-intelligent-alarm-repair-assistant-master.tar.gz")
-        sync_condition = "true" if update else f"[ ! -d {shell_quote(PLATFORM_REPO)} ]"
+        sync_condition = "true"
         sync_intro = (
             "echo '开始通过压缩包拉取最新代码'"
             if update
-            else "echo '平台代码不存在，开始通过压缩包初始化'"
+            else "echo '开始通过压缩包同步代码'"
         )
         return "; ".join(
             [
@@ -188,8 +189,7 @@ def ensure_platform_repo_command(update=False, country=None):
                 "{ code=$?; echo \"创建平台目录失败，退出码: $code\"; exit $code; }; "
                 f"tar -xzf {archive_path} -C {shell_quote(PLATFORM_REPO)} --strip-components=1 || "
                 "{ code=$?; echo \"压缩包解压失败，退出码: $code\"; exit $code; }; "
-                "echo '代码压缩包同步完成'; "
-                "else echo '平台代码目录已存在，跳过压缩包初始化'; fi",
+                "echo '代码压缩包同步完成'; fi",
                 f"cd {shell_quote(PLATFORM_REPO)} || "
                 "{ code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }",
                 "echo '当前版本: archive/master'",
