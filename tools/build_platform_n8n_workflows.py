@@ -137,44 +137,66 @@ def runtime_env_for_country(country):
     return runtime_env
 
 
-def source_env_prefix(country):
-    return (
-        "set -a && [ -f .env.local ] && source .env.local; set +a && "
-        f"{env_prefix(runtime_env_for_country(country))}"
-    )
-
-
 def remote(country, inner_command):
     cfg = COUNTRIES[country]
     return f"{cfg['ssh']} {shell_quote(inner_command)}"
 
 
-def ensure_platform_repo_command(update=False):
-    update_command = (
-        f" && git remote set-url origin {shell_quote(PLATFORM_REPO_URL)}"
-        " && git fetch origin master && git reset --hard origin/master"
-        if update
-        else ""
-    )
-    return (
+def ensure_platform_repo_command(update=False, country=None):
+    label = COUNTRIES[country]["display"] if country else "unknown"
+    lines = [
+        f"echo '========== {label} 智能告警修复平台 =========='",
+        f"echo '平台目录: {PLATFORM_REPO}'",
         f"if [ ! -d {shell_quote(PLATFORM_REPO)} ]; then "
-        f"git clone {shell_quote(PLATFORM_REPO_URL)} {shell_quote(PLATFORM_REPO)}; "
-        "fi && "
-        f"cd {shell_quote(PLATFORM_REPO)}"
-        f"{update_command}"
+        f"echo '平台代码不存在，开始首次 clone'; "
+        f"git clone {shell_quote(PLATFORM_REPO_URL)} {shell_quote(PLATFORM_REPO)} || "
+        "{ code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; "
+        "else echo '平台代码目录已存在，跳过首次 clone'; fi",
+        f"cd {shell_quote(PLATFORM_REPO)} || "
+        "{ code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }",
+    ]
+    if update:
+        lines.extend(
+            [
+                "echo '开始拉取最新代码'",
+                f"git remote set-url origin {shell_quote(PLATFORM_REPO_URL)} || "
+                "{ code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }",
+                "git fetch origin master || { code=$?; echo \"fetch 失败，退出码: $code\"; exit $code; }",
+                "git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }",
+            ]
+        )
+    else:
+        lines.append("echo '本节点不更新代码；如需更新，请单独执行【拉取最新代码】节点'")
+    lines.append("echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"")
+    return "; ".join(lines)
+
+
+def source_env_command(country):
+    return (
+        "if [ -f .env.local ]; then "
+        "echo '加载 .env.local'; set -a; source .env.local; set +a; "
+        "else echo '未发现 .env.local，使用 n8n 内置变量'; fi; "
+        f"{env_prefix(runtime_env_for_country(country))}"
     )
 
 
-def platform_command(country, body):
-    return f"{ensure_platform_repo_command()} && {source_env_prefix(country)} {body}"
+def platform_command(country, body, action_label):
+    return (
+        f"{ensure_platform_repo_command(country=country)}; "
+        f"{source_env_command(country)} "
+        f"echo '开始执行: {action_label}'; "
+        f"{body}; "
+        "code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\""
+    )
 
 
 def pull_command(country):
-    return remote(country, f"{ensure_platform_repo_command(update=True)} && git log -1 --oneline")
+    return remote(country, f"{ensure_platform_repo_command(update=True, country=country)}; echo '拉取完成'")
 
 
 def check_command(country):
-    return remote(country, platform_command(country, "python3 tools/task_execution_checker.py --task repair"))
+    body = "python3 tools/task_execution_checker.py --task repair"
+    return remote(country, platform_command(country, body, "环境检测"))
 
 
 def repair_command(country, unbuffered=False):
@@ -182,11 +204,12 @@ def repair_command(country, unbuffered=False):
     lock_dir = f"/tmp/intelligent_alarm_repair_{country}.lockdir"
     body = (
         f"LOCK_DIR={shell_quote(lock_dir)}; "
+        "echo \"并发锁目录: $LOCK_DIR\"; "
         "if ! mkdir \"$LOCK_DIR\" 2>/dev/null; then echo '已有智能修复任务运行中，跳过本次执行'; exit 0; fi; "
         "trap \"rmdir \\\"$LOCK_DIR\\\"\" EXIT; "
         f"{python} core/repair_strict_7step.py"
     )
-    return remote(country, platform_command(country, body))
+    return remote(country, platform_command(country, body, "智能修复"))
 
 
 def cn_external_command(command):
@@ -200,7 +223,14 @@ def diagnostic_command(country, original):
     if country == "cn":
         return cn_external_command(original)
     if "probe_ds_api_mode.py" in original:
-        return remote(country, platform_command(country, "python3 tools/probe_ds_api_mode.py --instance-id ${DS_PROBE_INSTANCE_ID}"))
+        return remote(
+            country,
+            platform_command(
+                country,
+                "python3 tools/probe_ds_api_mode.py --instance-id ${DS_PROBE_INSTANCE_ID}",
+                "DS API 探测",
+            ),
+        )
     if "workflow-instances" in original or "find /data" in original:
         return re.sub(r'(?i)token:\s*[0-9a-f]+', "token: ${DS_TOKEN}", original)
     return original
@@ -244,15 +274,17 @@ def build_template(country):
         parameters = node.get("parameters", {})
         if "command" not in parameters:
             continue
+        node_name = node.get("name", "")
         command = parameters["command"]
         if command.startswith("="):
             command = command[1:]
             prefix = "="
         else:
             prefix = ""
-        parameters["command"] = prefix + redact_command(
-            replace_command(country, node.get("name", ""), command)
-        )
+        replacement = redact_command(replace_command(country, node_name, command))
+        if node_name in {"拉取最新代码", "环境检测", "执行环境检测", "智能修复", "智能修复1"}:
+            prefix = ""
+        parameters["command"] = prefix + replacement
 
     return result
 
