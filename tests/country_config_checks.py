@@ -78,6 +78,20 @@ class CountryConfigTests(unittest.TestCase):
         self.assertEqual(module.DS_CONFIG["instance_endpoint_style"], "process-instances")
         self.assertEqual(module.REPAIR_CONFIG["priority_workflow_codes"], [["wf-a", "WF_A"]])
 
+    def test_placeholder_environment_values_fall_back_to_defaults(self):
+        env = {
+            "DS_ENVIRONMENT_CODE": "REPLACE_WITH_PK_ENVIRONMENT_CODE",
+            "DS_TENANT_CODE": "REPLACE_WITH_PK_TENANT_CODE",
+            "OPENCLAW_HOOK_TOKEN": "your_openclaw_hook_token",
+        }
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            module = load_module()
+
+        self.assertEqual(module.DS_CONFIG["environment_code"], "154818922491872")
+        self.assertEqual(module.DS_CONFIG["tenant_code"], "dolphinscheduler")
+        self.assertEqual(module.OPENCLAW_CONFIG["token"], "wattrel-webhook-secret-token-2026")
+
     def test_fuyan_workflows_can_be_overridden_by_json_environment_variable(self):
         workflows = [
             {

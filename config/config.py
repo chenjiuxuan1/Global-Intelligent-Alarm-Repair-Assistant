@@ -99,6 +99,13 @@ def _get_env(name, default=None):
     value = os.environ.get(name)
     if value is None or value == "":
         return default
+    normalized = str(value).strip().lower()
+    if (
+        normalized.startswith("replace_with_")
+        or normalized.startswith("your_")
+        or normalized in {"todo", "tbd", "changeme"}
+    ):
+        return default
     return value
 
 
