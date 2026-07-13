@@ -220,7 +220,12 @@
     "platformTemplate": true,
     "sourceWorkflowName": "智能告警修复-墨西哥",
     "platformCountry": "mx",
-    "platformRepo": "/root/Global-Intelligent-Alarm-Repair-Assistant"
+    "platformRepo": "/root/Global-Intelligent-Alarm-Repair-Assistant",
+    "platformRepoBootstrap": {
+      "repo": "/root/Global-Intelligent-Alarm-Repair-Assistant",
+      "url": "https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git",
+      "mode": "clone_if_missing_run_nodes_update_only_pull_node"
+    }
   },
   "id": "AEvycwn8gWdP7S4K",
   "tags": []

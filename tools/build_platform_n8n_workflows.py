@@ -16,6 +16,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = REPO_ROOT / "deploy" / "n8n" / "templates"
 PLATFORM_REPO = "/root/Global-Intelligent-Alarm-Repair-Assistant"
 PLATFORM_REPO_URL = "https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git"
+PLATFORM_REPO_ARCHIVE_URL = (
+    "https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant/archive/refs/heads/master.tar.gz"
+)
 
 
 COUNTRIES = {
@@ -163,6 +166,36 @@ def remote(country, inner_command):
 
 def ensure_platform_repo_command(update=False, country=None):
     label = COUNTRIES[country]["display"] if country else "unknown"
+    if country == "cn":
+        archive = shell_quote(PLATFORM_REPO_ARCHIVE_URL)
+        archive_path = shell_quote("/tmp/global-intelligent-alarm-repair-assistant-master.tar.gz")
+        sync_condition = "true" if update else f"[ ! -d {shell_quote(PLATFORM_REPO)} ]"
+        sync_intro = (
+            "echo '开始通过压缩包拉取最新代码'"
+            if update
+            else "echo '平台代码不存在，开始通过压缩包初始化'"
+        )
+        return "; ".join(
+            [
+                f"echo '========== {label} 智能告警修复平台 =========='",
+                f"echo '平台目录: {PLATFORM_REPO}'",
+                "echo '中国环境使用压缩包方式同步代码，避免 git fetch/clone 网络中断'",
+                f"if {sync_condition}; then "
+                f"{sync_intro}; "
+                f"curl -L --retry 3 --retry-delay 2 --connect-timeout 10 -o {archive_path} {archive} || "
+                "{ code=$?; echo \"压缩包下载失败，退出码: $code\"; exit $code; }; "
+                f"mkdir -p {shell_quote(PLATFORM_REPO)} || "
+                "{ code=$?; echo \"创建平台目录失败，退出码: $code\"; exit $code; }; "
+                f"tar -xzf {archive_path} -C {shell_quote(PLATFORM_REPO)} --strip-components=1 || "
+                "{ code=$?; echo \"压缩包解压失败，退出码: $code\"; exit $code; }; "
+                "echo '代码压缩包同步完成'; "
+                "else echo '平台代码目录已存在，跳过压缩包初始化'; fi",
+                f"cd {shell_quote(PLATFORM_REPO)} || "
+                "{ code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }",
+                "echo '当前版本: archive/master'",
+            ]
+        )
+
     lines = [
         f"echo '========== {label} 智能告警修复平台 =========='",
         f"echo '平台目录: {PLATFORM_REPO}'",
@@ -288,6 +321,19 @@ def build_template(country):
     result["meta"]["sourceWorkflowName"] = source_workflow_name
     result["meta"]["platformCountry"] = country
     result["meta"]["platformRepo"] = PLATFORM_REPO
+    result["meta"]["platformRepoBootstrap"] = (
+        {
+            "repo": PLATFORM_REPO,
+            "url": PLATFORM_REPO_ARCHIVE_URL,
+            "mode": "archive_tar_gz_for_china",
+        }
+        if country == "cn"
+        else {
+            "repo": PLATFORM_REPO,
+            "url": PLATFORM_REPO_URL,
+            "mode": "clone_if_missing_run_nodes_update_only_pull_node",
+        }
+    )
 
     for node in result.get("nodes", []):
         parameters = node.get("parameters", {})

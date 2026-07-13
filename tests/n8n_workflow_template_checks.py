@@ -53,11 +53,18 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                 for command in relevant:
                     self.assertFalse(command.startswith("="))
                     self.assertIn("/root/Global-Intelligent-Alarm-Repair-Assistant", command)
-                    self.assertIn("git clone", command)
-                    self.assertIn("Global-Intelligent-Alarm-Repair-Assistant.git", command)
+                    if country == "cn":
+                        self.assertIn("master.tar.gz", command)
+                        self.assertIn("curl -L", command)
+                        self.assertIn("tar -xzf", command)
+                        self.assertIn("跳过压缩包初始化", command)
+                        self.assertNotIn("git clone https://", command)
+                    else:
+                        self.assertIn("git clone", command)
+                        self.assertIn("Global-Intelligent-Alarm-Repair-Assistant.git", command)
+                        self.assertIn("本节点不更新代码；如需更新，请单独执行【拉取最新代码】节点", command)
                     self.assertNotIn("git fetch origin master", command)
                     self.assertNotIn("git reset --hard origin/master", command)
-                    self.assertIn("本节点不更新代码；如需更新，请单独执行【拉取最新代码】节点", command)
                     self.assertIn("当前版本:", command)
                     self.assertIn("开始执行:", command)
                     self.assertIn("export APP_COUNTRY=", command)
@@ -71,7 +78,7 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                     self.assertIn(country, command)
 
     def test_pull_commands_create_or_update_platform_repo(self):
-        for display in EXPECTED:
+        for display, (country, _) in EXPECTED.items():
             with self.subTest(display=display):
                 workflow = self.load_template(display)
                 relevant = [
@@ -82,12 +89,20 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                 self.assertGreaterEqual(len(relevant), 1)
                 for command in relevant:
                     self.assertFalse(command.startswith("="))
-                    self.assertIn("git clone", command)
-                    self.assertIn("Global-Intelligent-Alarm-Repair-Assistant.git", command)
-                    self.assertIn("git remote set-url origin", command)
-                    self.assertIn("git fetch origin master", command)
-                    self.assertIn("git reset --hard origin/master", command)
-                    self.assertIn("开始拉取最新代码", command)
+                    if country == "cn":
+                        self.assertIn("master.tar.gz", command)
+                        self.assertIn("curl -L", command)
+                        self.assertIn("tar -xzf", command)
+                        self.assertIn("开始通过压缩包拉取最新代码", command)
+                        self.assertNotIn("git fetch origin master", command)
+                        self.assertNotIn("git reset --hard origin/master", command)
+                    else:
+                        self.assertIn("git clone", command)
+                        self.assertIn("Global-Intelligent-Alarm-Repair-Assistant.git", command)
+                        self.assertIn("git remote set-url origin", command)
+                        self.assertIn("git fetch origin master", command)
+                        self.assertIn("git reset --hard origin/master", command)
+                        self.assertIn("开始拉取最新代码", command)
                     self.assertIn("拉取完成", command)
 
     def test_china_commands_use_more_tolerant_ds_list_settings(self):
