@@ -1,0 +1,133 @@
+{
+  "name": "印尼-DS失败自动重跑",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ine-ds-failed-auto-rerun",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "23dc5c36-b747-4bf2-a5f2-eaf1676c4ed2",
+      "name": "DS失败告警Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        360,
+        220
+      ],
+      "webhookId": "ine-ds-failed-auto-rerun"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.body ?? $json;\nconst headers = $json.headers || {};\n\nfunction findValue(value, names) {\n  if (!value || typeof value !== 'object') return '';\n  if (Array.isArray(value)) {\n    for (const item of value) {\n      const found = findValue(item, names);\n      if (found) return found;\n    }\n    return '';\n  }\n  for (const [key, item] of Object.entries(value)) {\n    if (names.has(String(key).toLowerCase()) && item !== undefined && item !== null && item !== '') {\n      return String(item).trim();\n    }\n    const found = findValue(item, names);\n    if (found) return found;\n  }\n  return '';\n}\n\nconst requestId = raw.request_id || `ine-ds-alert-${Date.now()}`;\nconst dsToken =\n  findValue(raw, new Set(['ds_token', 'dstoken', 'token', 'dolphinscheduler_token'])) ||\n  String(headers['x-ds-token'] || headers['X-DS-Token'] || '').trim();\nconst payloadJson = JSON.stringify(raw);\nconst payloadB64 = Buffer.from(payloadJson, 'utf8').toString('base64');\n\nreturn [{\n  json: {\n    accepted: true,\n    country: 'ine',\n    request_id: requestId,\n    ds_token: dsToken,\n    payload_json: payloadJson,\n    payload_b64: payloadB64,\n    note: '后台会调用 retry_instance，最多 3 次，从失败节点开始执行，每次检查间隔 3 分钟。'\n  }\n}];"
+      },
+      "id": "ed5cc74d-7726-445f-b6d8-37946863889d",
+      "name": "编码告警请求",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=ssh -p 36000 root@192.168.21.236 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && REQUEST_DS_TOKEN='\"'\"'{{$json.ds_token}}'\"'\"' PAYLOAD_B64='\"'\"'{{$json.payload_b64}}'\"'\"' REQUEST_ID='\"'\"'{{$json.request_id}}'\"'\"' nohup python3 tools/ine_ds_failed_auto_retry.py --payload-b64 \"$PAYLOAD_B64\" --ds-token \"$REQUEST_DS_TOKEN\" --request-id \"$REQUEST_ID\" >/tmp/ine_ds_failed_auto_retry_\"$REQUEST_ID\".log 2>&1 & echo \"{\\\"accepted\\\":true,\\\"country\\\":\\\"ine\\\",\\\"request_id\\\":\\\"$REQUEST_ID\\\",\\\"log\\\":\\\"/tmp/ine_ds_failed_auto_retry_$REQUEST_ID.log\\\"}\"'"
+      },
+      "id": "5d074878-9dd3-4d7a-8de1-a9007afcb2a6",
+      "name": "印尼机器启动后台重跑",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        840,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = String($json.stdout || '').trim();\nlet started = null;\ntry {\n  started = stdout ? JSON.parse(stdout) : null;\n} catch (error) {\n  started = { raw_stdout: stdout };\n}\n\nreturn [{\n  json: {\n    accepted: true,\n    country: 'ine',\n    request_id: started?.request_id || $json.request_id || '',\n    background_started: Boolean(started?.accepted),\n    runner: started,\n    message: '已接收印尼 DS 失败告警，后台自动重跑任务已启动。'\n  }\n}];"
+      },
+      "id": "3b9f5bdd-71a9-497d-a073-b301415c457e",
+      "name": "整理响应",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "da6f1af4-3618-418d-ae87-323e9131a75a",
+      "name": "返回Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        220
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "DS失败告警Webhook": {
+      "main": [
+        [
+          {
+            "node": "编码告警请求",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "编码告警请求": {
+      "main": [
+        [
+          {
+            "node": "印尼机器启动后台重跑",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "印尼机器启动后台重跑": {
+      "main": [
+        [
+          {
+            "node": "整理响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "整理响应": {
+      "main": [
+        [
+          {
+            "node": "返回Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "ine-ds-failed-auto-rerun-v1",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "ine-ds-failed-auto-rerun",
+  "tags": []
+}

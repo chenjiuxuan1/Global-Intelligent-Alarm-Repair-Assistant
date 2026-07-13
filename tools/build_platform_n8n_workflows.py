@@ -31,6 +31,9 @@ COUNTRIES = {
             "APP_COUNTRY": "cn",
             "APP_WORKSPACE": PLATFORM_REPO,
             "DS_BASE_URL": "http://10.20.47.14:12345/dolphinscheduler",
+            "DS_API_GET_TIMEOUT_SECONDS": "30",
+            "DS_API_GET_RETRY_COUNT": "2",
+            "DS_WORKFLOW_LIST_PAGE_SIZE": "20",
             "DB_HOST": "rm-uf60amp9vz996n520.mysql.rds.aliyuncs.com",
             "DB_PORT": "3306",
             "DB_USER": "e_ds",
@@ -125,10 +128,17 @@ def env_prefix(runtime_env):
     return " ".join(parts)
 
 
+def runtime_env_for_country(country):
+    runtime_env = dict(COUNTRIES[country]["runtime_env"])
+    runtime_env.setdefault("WORKFLOW_CODE_ROOT", "/data/git/starrocks/workflow")
+    runtime_env.setdefault("WORKFLOW_CODE_COUNTRY", country)
+    return runtime_env
+
+
 def source_env_prefix(country):
     return (
         "set -a && [ -f .env.local ] && source .env.local; set +a && "
-        f"{env_prefix(COUNTRIES[country]['runtime_env'])}"
+        f"{env_prefix(runtime_env_for_country(country))}"
     )
 
 
@@ -193,12 +203,16 @@ def redact_command(command):
 
 def build_template(country):
     source_path = Path(COUNTRIES[country]["source"])
+    fallback_path = OUTPUT_DIR / f"智能告警修复-{COUNTRIES[country]['display']}-统一平台模板.json"
+    if not source_path.exists() and fallback_path.exists():
+        source_path = fallback_path
     workflow = json.loads(source_path.read_text(encoding="utf-8"))
     result = copy.deepcopy(workflow)
-    result["name"] = f"{workflow['name']}-统一平台模板"
+    source_workflow_name = workflow.get("meta", {}).get("sourceWorkflowName") or workflow["name"]
+    result["name"] = f"{source_workflow_name}-统一平台模板"
     result["active"] = False
     result.setdefault("meta", {})["platformTemplate"] = True
-    result["meta"]["sourceWorkflowName"] = workflow["name"]
+    result["meta"]["sourceWorkflowName"] = source_workflow_name
     result["meta"]["platformCountry"] = country
     result["meta"]["platformRepo"] = PLATFORM_REPO
 

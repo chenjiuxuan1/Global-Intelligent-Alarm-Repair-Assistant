@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import sys
+import tempfile
 import types
 import unittest
 from datetime import datetime, timedelta
@@ -784,6 +785,28 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(completed_tasks, [])
         self.assertEqual(len(failed_tasks), 3)
         self.assertTrue(all(item["final_status"] == "failed" for item in failed_tasks))
+
+    def test_execute_repairs_in_batches_keeps_skipped_no_workflow_reason(self):
+        module = load_module()
+        tasks = [
+            {
+                "table": "ods_riskdata_interface_cost_statistics",
+                "dt": "2026-07-12",
+                "workflow_code": "",
+                "task_code": "",
+                "error": "未找到工作流",
+            }
+        ]
+
+        with mock.patch.object(module, "log"):
+            results, completed_tasks, failed_tasks = module.execute_repairs_in_batches(tasks)
+
+        self.assertEqual(completed_tasks, [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["status"], "skipped_no_workflow")
+        self.assertEqual(len(failed_tasks), 1)
+        self.assertEqual(failed_tasks[0]["table"], "ods_riskdata_interface_cost_statistics")
+        self.assertEqual(failed_tasks[0]["status"], "skipped_no_workflow")
 
     def test_main_skips_fuyan_when_repairs_were_launched_but_not_completed(self):
         module = load_module()
@@ -2081,40 +2104,135 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(len(failed), 1)
         self.assertEqual(failed[0]["final_status"], "timeout")
 
-    def test_apply_repair_strategy_allows_first_retry_for_suspected_redundant_data(self):
+    def test_apply_repair_strategy_allows_first_redundant_retry_when_code_has_delete(self):
         module = load_module()
-        tasks = [
-            {
-                "table": "ods_qsq_erp_cpop_settlement_order_procedure",
-                "dt": "2026-04-27",
-                "diff": -4,
-            }
-        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            country_dir = Path(tmp) / "ine"
+            country_dir.mkdir()
+            (country_dir / "dwd_asset_auto_withhold.sql").write_text(
+                "delete from dwd.dwd_asset_auto_withhold where dt='${dt}';\n"
+                "insert into dwd.dwd_asset_auto_withhold select * from ods.x;",
+                encoding="utf-8",
+            )
+            module.WORKFLOW_CODE_ROOT = tmp
+            module.WORKFLOW_CODE_COUNTRY = "ine"
+            tasks = [
+                {
+                    "table": "dwd_asset_auto_withhold",
+                    "dt": "2026-07-05",
+                    "diff": -1476434,
+                }
+            ]
 
-        runnable, manual_review = module.apply_repair_strategy(tasks, {})
+            runnable, manual_review = module.apply_repair_strategy(tasks, {})
 
-        self.assertEqual([item["table"] for item in runnable], ["ods_qsq_erp_cpop_settlement_order_procedure"])
+        self.assertEqual([item["table"] for item in runnable], ["dwd_asset_auto_withhold"])
         self.assertEqual(manual_review, [])
+
+    def test_apply_repair_strategy_allows_first_redundant_retry_when_code_has_insert_overwrite(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            country_dir = Path(tmp) / "ine"
+            country_dir.mkdir()
+            (country_dir / "asset_auto_withhold.sh").write_text(
+                "spark-sql -e \"insert overwrite table dwd.dwd_asset_auto_withhold select * from ods.ods_repay_auto_withhold_asset\"",
+                encoding="utf-8",
+            )
+            module.WORKFLOW_CODE_ROOT = tmp
+            module.WORKFLOW_CODE_COUNTRY = "ine"
+            tasks = [
+                {
+                    "table": "dwd_asset_auto_withhold",
+                    "dt": "2026-07-05",
+                    "diff": -1476434,
+                }
+            ]
+
+            runnable, manual_review = module.apply_repair_strategy(tasks, {})
+
+        self.assertEqual([item["table"] for item in runnable], ["dwd_asset_auto_withhold"])
+        self.assertEqual(manual_review, [])
+
+    def test_apply_repair_strategy_escalates_redundant_data_without_delete_or_overwrite(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            country_dir = Path(tmp) / "ine"
+            country_dir.mkdir()
+            (country_dir / "dwd_asset_auto_withhold.sql").write_text(
+                "insert into dwd.dwd_asset_auto_withhold select * from ods.ods_repay_auto_withhold_asset",
+                encoding="utf-8",
+            )
+            module.WORKFLOW_CODE_ROOT = tmp
+            module.WORKFLOW_CODE_COUNTRY = "ine"
+            tasks = [
+                {
+                    "table": "dwd_asset_auto_withhold",
+                    "dt": "2026-07-05",
+                    "diff": -1476434,
+                }
+            ]
+
+            runnable, manual_review = module.apply_repair_strategy(tasks, {})
+
+        self.assertEqual(runnable, [])
+        self.assertEqual(len(manual_review), 1)
+        self.assertEqual(manual_review[0]["status"], "skipped_manual_review")
+        self.assertIn("未发现 delete 或 insert overwrite", manual_review[0]["error"])
+
+    def test_apply_repair_strategy_requires_delete_or_overwrite_targeting_alert_table(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            country_dir = Path(tmp) / "ine"
+            country_dir.mkdir()
+            (country_dir / "asset_auto_withhold_downstream.sql").write_text(
+                "insert overwrite table ads.ads_withhold_summary "
+                "select * from dwd.dwd_asset_auto_withhold",
+                encoding="utf-8",
+            )
+            module.WORKFLOW_CODE_ROOT = tmp
+            module.WORKFLOW_CODE_COUNTRY = "ine"
+            tasks = [
+                {
+                    "table": "dwd_asset_auto_withhold",
+                    "dt": "2026-07-05",
+                    "diff": -1476434,
+                }
+            ]
+
+            runnable, manual_review = module.apply_repair_strategy(tasks, {})
+
+        self.assertEqual(runnable, [])
+        self.assertEqual(len(manual_review), 1)
+        self.assertIn("未发现 delete 或 insert overwrite", manual_review[0]["error"])
 
     def test_apply_repair_strategy_escalates_repeated_redundant_data_alert_to_manual_review(self):
         module = load_module()
-        tasks = [
-            {
-                "table": "ods_qsq_erp_cpop_settlement_order_procedure",
-                "dt": "2026-04-27",
-                "diff": -4,
-            }
-        ]
-        strategy_state = {
-            "ods_qsq_erp_cpop_settlement_order_procedure": {
-                "2026-04-27": {
-                    "redundant_retry_done": True,
-                    "manual_review_required": False,
+        with tempfile.TemporaryDirectory() as tmp:
+            country_dir = Path(tmp) / "ine"
+            country_dir.mkdir()
+            (country_dir / "ods_qsq_erp_cpop_settlement_order_procedure.sql").write_text(
+                "insert overwrite table ods.ods_qsq_erp_cpop_settlement_order_procedure select 1",
+                encoding="utf-8",
+            )
+            module.WORKFLOW_CODE_ROOT = tmp
+            module.WORKFLOW_CODE_COUNTRY = "ine"
+            tasks = [
+                {
+                    "table": "ods_qsq_erp_cpop_settlement_order_procedure",
+                    "dt": "2026-04-27",
+                    "diff": -4,
+                }
+            ]
+            strategy_state = {
+                "ods_qsq_erp_cpop_settlement_order_procedure": {
+                    "2026-04-27": {
+                        "redundant_retry_done": True,
+                        "manual_review_required": False,
+                    }
                 }
             }
-        }
 
-        runnable, manual_review = module.apply_repair_strategy(tasks, strategy_state)
+            runnable, manual_review = module.apply_repair_strategy(tasks, strategy_state)
 
         self.assertEqual(runnable, [])
         self.assertEqual(len(manual_review), 1)
@@ -3002,6 +3120,83 @@ class RepairStrict7StepTests(unittest.TestCase):
 
         self.assertTrue(success)
         self.assertEqual(data["totalList"], [{"code": "wf-query"}])
+
+    def test_get_workflow_definition_list_uses_configured_page_size(self):
+        module = load_module()
+        module.DS_WORKFLOW_LIST_PAGE_SIZE = 20
+        seen_endpoints = []
+
+        def fake_ds_api_get(endpoint):
+            seen_endpoints.append(endpoint)
+            if endpoint.endswith("/workflow-definition?pageNo=1&pageSize=20"):
+                return True, {"totalList": [{"code": "wf-cn"}], "totalPage": 1}, ""
+            raise AssertionError(endpoint)
+
+        with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get):
+            success, data, msg = module.get_workflow_definition_list()
+
+        self.assertTrue(success)
+        self.assertEqual(data["totalList"], [{"code": "wf-cn"}])
+        self.assertEqual(len(seen_endpoints), 1)
+
+    def test_ds_api_get_retries_timeout_errors(self):
+        module = load_module()
+        module.DS_API_GET_TIMEOUT_SECONDS = 30
+        module.DS_API_GET_RETRY_COUNT = 2
+        attempts = []
+
+        class FakeResponse:
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return b'{"code": 0, "data": {"ok": true}, "msg": ""}'
+
+        def fake_urlopen(req, timeout):
+            attempts.append(timeout)
+            if len(attempts) == 1:
+                raise TimeoutError("timed out")
+            return FakeResponse()
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+            mock.patch("time.sleep"):
+            success, data, msg = module.ds_api_get("/projects/default-project/workflow-definition?pageNo=1&pageSize=20")
+
+        self.assertTrue(success)
+        self.assertEqual(data, {"ok": True})
+        self.assertEqual(attempts, [30, 30])
+
+    def test_step2_find_locations_preserves_workflow_list_failure_reason(self):
+        module = load_module()
+        alerts = [
+            {
+                "id": 1,
+                "table": "dwd_asset_auto_withhold",
+                "src_tbl": "ods_repay_auto_withhold_asset",
+                "dest_tbl": "dwd_asset_auto_withhold",
+                "dt": "2026-07-05",
+                "diff": -1530095,
+            }
+        ]
+
+        with mock.patch.object(module, "step2_search_in_workflow", return_value=None), \
+            mock.patch.object(
+                module,
+                "get_workflow_definition_list",
+                return_value=(False, {}, "<urlopen error timed out>"),
+            ), \
+            mock.patch.object(module, "log"):
+            tasks = module.step2_find_locations(alerts)
+
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["workflow_name"], "未找到")
+        self.assertIn("获取工作流列表失败", tasks[0]["error"])
+        self.assertIn("timed out", tasks[0]["error"])
 
     def test_get_workflow_definition_detail_falls_back_to_workflow_definition_when_process_style_is_configured(self):
         module = load_module()

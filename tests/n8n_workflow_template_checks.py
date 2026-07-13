@@ -53,7 +53,27 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                 for command in relevant:
                     self.assertIn("/root/Global-Intelligent-Alarm-Repair-Assistant", command)
                     self.assertIn("APP_COUNTRY=", command)
+                    self.assertIn("WORKFLOW_CODE_ROOT=", command)
+                    self.assertIn("WORKFLOW_CODE_COUNTRY=", command)
+                    self.assertIn("/data/git/starrocks/workflow", command)
                     self.assertIn(country, command)
+
+    def test_china_commands_use_more_tolerant_ds_list_settings(self):
+        workflow = self.load_template("中国")
+        relevant = [
+            command
+            for name, command in self.commands(workflow)
+            if name in {"智能修复", "智能修复1", "环境检测", "执行环境检测"}
+        ]
+
+        self.assertGreaterEqual(len(relevant), 2)
+        for command in relevant:
+            self.assertIn("DS_API_GET_TIMEOUT_SECONDS=", command)
+            self.assertIn("'30'", command)
+            self.assertIn("DS_API_GET_RETRY_COUNT=", command)
+            self.assertIn("'2'", command)
+            self.assertIn("DS_WORKFLOW_LIST_PAGE_SIZE=", command)
+            self.assertIn("'20'", command)
 
     def test_templates_do_not_embed_known_inline_secrets(self):
         secret_patterns = [

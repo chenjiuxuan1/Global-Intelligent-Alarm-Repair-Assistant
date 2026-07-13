@@ -59,6 +59,11 @@ REPAIR_WORKFLOW_CONFLICT_POLL_INTERVAL_SECONDS = int(os.environ.get('REPAIR_WORK
 REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS = int(os.environ.get('REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS', '1800'))
 FAILED_STATE_CONFIRMATION_GRACE_SECONDS = int(os.environ.get('FAILED_STATE_CONFIRMATION_GRACE_SECONDS', '45'))
 FAILED_STATE_CONFIRMATION_MAX_RECHECKS = int(os.environ.get('FAILED_STATE_CONFIRMATION_MAX_RECHECKS', '5'))
+WORKFLOW_CODE_ROOT = os.environ.get('WORKFLOW_CODE_ROOT', '/data/git/starrocks/workflow').strip()
+WORKFLOW_CODE_COUNTRY = os.environ.get('WORKFLOW_CODE_COUNTRY', os.environ.get('APP_COUNTRY', 'ine')).strip()
+DS_API_GET_TIMEOUT_SECONDS = int(os.environ.get('DS_API_GET_TIMEOUT_SECONDS', '15'))
+DS_API_GET_RETRY_COUNT = int(os.environ.get('DS_API_GET_RETRY_COUNT', os.environ.get('DS_API_RETRY_COUNT', '1')))
+DS_WORKFLOW_LIST_PAGE_SIZE = int(os.environ.get('DS_WORKFLOW_LIST_PAGE_SIZE', '100'))
 
 # 维护任务关键词（排除）
 MAINTENANCE_KEYWORDS = ['补充', '删除', '清理', '修复', '历史', '冗余', '临时', 'test', 'copy', '手插入']
@@ -88,27 +93,28 @@ def _get_definition_detail_endpoints(project_code, workflow_code):
 
 
 def _get_definition_list_endpoint_templates():
+    page_size = DS_WORKFLOW_LIST_PAGE_SIZE
     if DS_DEFINITION_ENDPOINT_STYLE == 'workflow-definition':
         return [
-            "/projects/{project_code}/workflow-definition?pageNo={page_no}&pageSize=100",
+            f"/projects/{{project_code}}/workflow-definition?pageNo={{page_no}}&pageSize={page_size}",
             "/projects/{project_code}/workflow-definition/query-workflow-definition-list",
             "/projects/{project_code}/workflow-definition/query-process-definition-list",
-            "/projects/{project_code}/process-definition?pageNo={page_no}&pageSize=100",
+            f"/projects/{{project_code}}/process-definition?pageNo={{page_no}}&pageSize={page_size}",
             "/projects/{project_code}/process-definition/query-workflow-definition-list",
             "/projects/{project_code}/process-definition/query-process-definition-list",
         ]
     if DS_DEFINITION_ENDPOINT_STYLE == 'process-definition':
         return [
-            "/projects/{project_code}/process-definition?pageNo={page_no}&pageSize=100",
+            f"/projects/{{project_code}}/process-definition?pageNo={{page_no}}&pageSize={page_size}",
             "/projects/{project_code}/process-definition/query-workflow-definition-list",
             "/projects/{project_code}/process-definition/query-process-definition-list",
-            "/projects/{project_code}/workflow-definition?pageNo={page_no}&pageSize=100",
+            f"/projects/{{project_code}}/workflow-definition?pageNo={{page_no}}&pageSize={page_size}",
             "/projects/{project_code}/workflow-definition/query-workflow-definition-list",
             "/projects/{project_code}/workflow-definition/query-process-definition-list",
         ]
     return [
-        "/projects/{project_code}/workflow-definition?pageNo={page_no}&pageSize=100",
-        "/projects/{project_code}/process-definition?pageNo={page_no}&pageSize=100",
+        f"/projects/{{project_code}}/workflow-definition?pageNo={{page_no}}&pageSize={page_size}",
+        f"/projects/{{project_code}}/process-definition?pageNo={{page_no}}&pageSize={page_size}",
         "/projects/{project_code}/workflow-definition/query-workflow-definition-list",
         "/projects/{project_code}/workflow-definition/query-process-definition-list",
         "/projects/{project_code}/process-definition/query-workflow-definition-list",
@@ -1046,21 +1052,28 @@ def ds_api_get(endpoint):
     req = urllib.request.Request(url)
     req.add_header('token', DS_TOKEN)
     req.add_header('Accept', 'application/json, text/plain, */*')
-    try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            result = _decode_json_response(response)
-            return result.get('code') == 0, result.get('data', {}), result.get('msg', '')
-    except urllib.error.HTTPError as e:
+    attempts = max(1, DS_API_GET_RETRY_COUNT)
+    last_error = ''
+    for attempt in range(1, attempts + 1):
         try:
-            body = e.read().decode('utf-8', errors='replace').strip().replace('\n', ' ')[:200]
-        except Exception:
-            body = ''
-        detail = f"{e}"
-        if body:
-            detail = f"{detail}; body={body}"
-        return False, {}, detail
-    except Exception as e:
-        return False, {}, str(e)
+            with urllib.request.urlopen(req, timeout=DS_API_GET_TIMEOUT_SECONDS) as response:
+                result = _decode_json_response(response)
+                return result.get('code') == 0, result.get('data', {}), result.get('msg', '')
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode('utf-8', errors='replace').strip().replace('\n', ' ')[:200]
+            except Exception:
+                body = ''
+            detail = f"{e}"
+            if body:
+                detail = f"{detail}; body={body}"
+            return False, {}, detail
+        except Exception as e:
+            last_error = str(e)
+            if attempt < attempts:
+                debug_log(f"GET {endpoint} 失败，第{attempt}/{attempts}次: {last_error}")
+                time.sleep(1)
+    return False, {}, last_error
 
 
 def ds_api_post(endpoint, data):
@@ -1556,6 +1569,7 @@ def step2_find_locations(alerts):
     
     # 缓存所有工作流列表（只获取一次）
     all_workflows = None
+    workflow_list_error = ''
     schedule_map = None
     
     tasks = []
@@ -1627,7 +1641,8 @@ def step2_find_locations(alerts):
                     all_workflows = data.get('totalList', [])
                     log(f"  获取到 {len(all_workflows)} 个工作流")
                 else:
-                    log(f"  ❌ 获取工作流列表失败: {msg}")
+                    workflow_list_error = msg or '获取工作流列表失败'
+                    log(f"  ❌ 获取工作流列表失败: {workflow_list_error}")
                     all_workflows = []
             
             # 在缓存的工作流中搜索
@@ -1738,6 +1753,11 @@ def step2_find_locations(alerts):
             }
             log(f"  ⏭️ {error_msg}")
         else:
+            error_msg = (
+                f"获取工作流列表失败，无法定位修复节点: {workflow_list_error}"
+                if workflow_list_error
+                else "未找到工作流"
+            )
             task = {
                 'alert_id': alert['id'],
                 'table': table,
@@ -1751,8 +1771,9 @@ def step2_find_locations(alerts):
                 'task_code': '',
                 'task_name': '',
                 'task_flag': '',
+                'error': error_msg,
             }
-            log(f"  ❌ 未找到")
+            log(f"  ❌ {error_msg}")
         
         tasks.append(task)
     
@@ -1794,7 +1815,115 @@ def is_suspected_redundant_data(task):
 
 def build_redundant_data_manual_review_reason():
     """构造疑似冗余/底层少数场景的人工处理提示"""
-    return '疑似当前层数据多于底层，重跑一次后仍未恢复，建议检查底层是否需要删数，并人工判断修复'
+    return '疑似当前层数据多于底层，未发现 delete 或 insert overwrite 覆盖逻辑，建议检查底层是否需要删数，并人工判断修复'
+
+
+def get_workflow_code_country_dir():
+    """返回当前国家的 StarRocks workflow 代码目录。"""
+    country = WORKFLOW_CODE_COUNTRY or 'ine'
+    return os.path.join(WORKFLOW_CODE_ROOT, country)
+
+
+def _normalize_sql_table_reference(value):
+    """标准化 SQL 里的表引用，保留库表层级用于目标表判断。"""
+    normalized = normalize_table_identifier(value)
+    normalized = normalized.replace('${', '').replace('}', '')
+    normalized = re.sub(r'\s+', '', normalized)
+    return normalized
+
+
+def _sql_reference_matches_table(reference, table_name):
+    candidate = _normalize_sql_table_reference(reference)
+    expected = _normalize_sql_table_reference(table_name)
+    if not candidate or not expected:
+        return False
+    return candidate == expected or candidate.endswith(f".{expected}")
+
+
+def has_overwrite_or_delete_statement(text, table_name=None):
+    """判断脚本是否包含可覆盖/清理目标表冗余数据的语句。"""
+    normalized = re.sub(r'--.*?$', '', str(text or ''), flags=re.MULTILINE)
+    normalized = re.sub(r'/\*.*?\*/', '', normalized, flags=re.DOTALL)
+    lowered = normalized.lower()
+
+    if not table_name:
+        return bool(
+            re.search(r'\bdelete\s+from\b', lowered)
+            or re.search(r'\binsert\s+overwrite\b', lowered)
+        )
+
+    target_patterns = [
+        r'\bdelete\s+from\s+([`$}{a-zA-Z0-9_.]+)',
+        r'\binsert\s+overwrite\s+(?:table\s+)?([`$}{a-zA-Z0-9_.]+)',
+    ]
+    for pattern in target_patterns:
+        for reference in re.findall(pattern, lowered):
+            if _sql_reference_matches_table(reference, table_name):
+                return True
+    return False
+
+
+def file_mentions_table(text, table_name):
+    """判断文件内容是否提到目标表，支持带库名和反引号。"""
+    normalized_text = normalize_table_identifier(text)
+    normalized_table = normalize_table_identifier(table_name)
+    stripped_table = strip_table_prefix(table_name)
+    return (
+        normalized_table in normalized_text
+        or f".{normalized_table}" in normalized_text
+        or stripped_table in normalized_text
+    )
+
+
+def get_candidate_workflow_code_files(task):
+    """在国家 workflow 目录下找和表名/任务名相关的 SQL/Shell/Python 文件。"""
+    country_dir = get_workflow_code_country_dir()
+    if not country_dir or not os.path.isdir(country_dir):
+        return []
+
+    table = task.get('table') or ''
+    task_name = task.get('task_name') or ''
+    search_terms = {
+        normalize_table_identifier(table),
+        normalize_table_identifier(task_name),
+        strip_table_prefix(table),
+        strip_table_prefix(task_name),
+    }
+    search_terms = {term for term in search_terms if term}
+    if not search_terms:
+        return []
+
+    allowed_suffixes = {'.sql', '.sh', '.py', '.txt', '.conf'}
+    max_file_size = int(os.environ.get('WORKFLOW_CODE_SCAN_MAX_FILE_SIZE', '1048576'))
+    candidates = []
+    for root, _, files in os.walk(country_dir):
+        for filename in files:
+            path = os.path.join(root, filename)
+            suffix = os.path.splitext(filename)[1].lower()
+            if suffix and suffix not in allowed_suffixes:
+                continue
+            try:
+                if os.path.getsize(path) > max_file_size:
+                    continue
+                with open(path, 'r', encoding='utf-8', errors='ignore') as handle:
+                    content = handle.read()
+            except OSError:
+                continue
+            haystack = normalize_table_identifier(f"{filename}\n{content}")
+            if any(term in haystack for term in search_terms):
+                candidates.append((path, content))
+    return candidates
+
+
+def redundant_data_task_has_safe_rerun_code(task):
+    """冗余数据场景只有存在 delete/insert overwrite 逻辑时才允许自动重跑。"""
+    for path, content in get_candidate_workflow_code_files(task):
+        if not file_mentions_table(content, task.get('table', '')):
+            continue
+        if has_overwrite_or_delete_statement(content, task.get('table', '')):
+            task['redundant_safe_rerun_evidence'] = path
+            return True
+    return False
 
 
 def build_forbidden_task_manual_review_reason(task):
@@ -1807,7 +1936,7 @@ def build_forbidden_task_manual_review_reason(task):
 
 
 def apply_repair_strategy(tasks, strategy_state):
-    """应用修复策略：疑似冗余数据仅允许自动重跑一次"""
+    """应用修复策略：疑似冗余数据必须有覆盖/删除逻辑，且仅允许自动重跑一次。"""
     runnable_tasks = []
     manual_review_tasks = []
 
@@ -1823,6 +1952,14 @@ def apply_repair_strategy(tasks, strategy_state):
             runnable_tasks.append(task)
             continue
 
+        if not redundant_data_task_has_safe_rerun_code(task):
+            manual_task = dict(task)
+            manual_task['status'] = 'skipped_manual_review'
+            manual_task['error'] = build_redundant_data_manual_review_reason()
+            log(f"  ⏭️ {task['table']}: 疑似冗余数据，未发现目标表 delete/insert overwrite，转人工处理")
+            manual_review_tasks.append(manual_task)
+            continue
+
         table_state = strategy_state.get(task['table'], {}).get(task['dt'], {})
         if table_state.get('redundant_retry_done'):
             manual_task = dict(task)
@@ -1830,6 +1967,9 @@ def apply_repair_strategy(tasks, strategy_state):
             manual_task['error'] = build_redundant_data_manual_review_reason()
             manual_review_tasks.append(manual_task)
         else:
+            evidence = task.get('redundant_safe_rerun_evidence')
+            if evidence:
+                log(f"  ✅ {task['table']}: 疑似冗余数据，发现覆盖/删除逻辑，允许自动重跑一次 ({evidence})")
             runnable_tasks.append(task)
 
     return runnable_tasks, manual_review_tasks
@@ -2194,7 +2334,7 @@ def execute_repairs_in_batches(tasks, max_parallel=4):
         completed_tasks, failed_tasks = step4_wait_and_check(running_instances)
         start_failed_tasks = [
             task for task in batch_results
-            if task.get('status') == 'failed'
+            if task.get('status') in {'failed', 'skipped_no_workflow', 'skipped_manual_review'}
         ]
 
         all_results.extend(batch_results)
