@@ -62,6 +62,8 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                     self.assertIn("开始执行:", command)
                     self.assertIn("export APP_COUNTRY=", command)
                     self.assertIn("export WORKFLOW_CODE_ROOT=", command)
+                    self.assertIn("export DS_WORKFLOW_LIST_MAX_SECONDS=", command)
+                    self.assertIn("'30'", command)
                     self.assertIn("APP_COUNTRY=", command)
                     self.assertIn("WORKFLOW_CODE_ROOT=", command)
                     self.assertIn("WORKFLOW_CODE_COUNTRY=", command)

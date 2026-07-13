@@ -146,6 +146,10 @@ def export_env_commands(runtime_env):
 
 def runtime_env_for_country(country):
     runtime_env = dict(COUNTRIES[country]["runtime_env"])
+    runtime_env.setdefault("DS_API_GET_TIMEOUT_SECONDS", "10")
+    runtime_env.setdefault("DS_API_GET_RETRY_COUNT", "1")
+    runtime_env.setdefault("DS_WORKFLOW_LIST_PAGE_SIZE", "50")
+    runtime_env.setdefault("DS_WORKFLOW_LIST_MAX_SECONDS", "30")
     runtime_env.setdefault("WORKFLOW_CODE_ROOT", "/data/git/starrocks/workflow")
     runtime_env.setdefault("WORKFLOW_CODE_COUNTRY", country)
     runtime_env.setdefault("REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS", "300")
