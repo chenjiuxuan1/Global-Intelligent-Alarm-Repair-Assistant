@@ -2944,6 +2944,33 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(tasks[0]["workflow_name"], "印尼-宽表全量工作流（1D）")
         self.assertIn("禁止自动修复", tasks[0]["error"])
 
+    def test_step2_find_locations_blocks_generic_wide_table_full_workflow_name(self):
+        module = load_module()
+        module.PRIORITY_WORKFLOWS = []
+        alerts = [{"id": 1, "table": "dwb_asset_info", "dt": "2026-05-11", "diff": 1}]
+
+        def fake_search(workflow_code, table_name):
+            return {
+                "workflow_code": "wf-blocked",
+                "workflow_name": "宽表全量工作流",
+                "task_code": "task-asset",
+                "task_name": "dwb_asset_info",
+                "task_flag": "YES",
+            }
+
+        with mock.patch.object(module, "step2_search_in_workflow", side_effect=fake_search), \
+            mock.patch.object(
+                module,
+                "get_workflow_definition_list",
+                return_value=(True, {"totalList": [{"workflowDefinitionCode": "wf-blocked"}]}, ""),
+            ), \
+            mock.patch.object(module, "log"):
+            tasks = module.step2_find_locations(alerts)
+
+        self.assertEqual(tasks[0]["workflow_code"], "")
+        self.assertEqual(tasks[0]["workflow_name"], "宽表全量工作流")
+        self.assertIn("禁止自动修复", tasks[0]["error"])
+
     def test_step2_find_locations_skips_blocked_workflow_and_uses_other_match(self):
         module = load_module()
         module.PRIORITY_WORKFLOWS = []

@@ -49,6 +49,9 @@ BLOCKED_WORKFLOW_NAMES = {
     for name in (REPAIR_CONFIG.get('blocked_workflow_names') or [])
     if str(name).strip()
 }
+BLOCKED_WORKFLOW_NAME_KEYWORDS = {
+    '宽表全量工作流',
+}
 BLOCKED_FUYAN_WORKFLOW_NAMES = {
     str(name).strip()
     for name in (REPAIR_CONFIG.get('blocked_fuyan_workflow_names') or [])
@@ -890,7 +893,11 @@ def build_blocked_workflow_error(location):
 
 def is_blocked_workflow_match(location):
     workflow_name = str(location.get('workflow_name') or '').strip()
-    return bool(workflow_name) and workflow_name in BLOCKED_WORKFLOW_NAMES
+    if not workflow_name:
+        return False
+    if workflow_name in BLOCKED_WORKFLOW_NAMES:
+        return True
+    return any(keyword in workflow_name for keyword in BLOCKED_WORKFLOW_NAME_KEYWORDS)
 
 
 def get_fuyan_name(workflow):
