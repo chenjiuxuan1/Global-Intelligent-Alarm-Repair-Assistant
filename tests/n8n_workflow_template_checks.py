@@ -60,6 +60,8 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                     self.assertIn("本节点不更新代码；如需更新，请单独执行【拉取最新代码】节点", command)
                     self.assertIn("当前版本:", command)
                     self.assertIn("开始执行:", command)
+                    self.assertIn("export APP_COUNTRY=", command)
+                    self.assertIn("export WORKFLOW_CODE_ROOT=", command)
                     self.assertIn("APP_COUNTRY=", command)
                     self.assertIn("WORKFLOW_CODE_ROOT=", command)
                     self.assertIn("WORKFLOW_CODE_COUNTRY=", command)

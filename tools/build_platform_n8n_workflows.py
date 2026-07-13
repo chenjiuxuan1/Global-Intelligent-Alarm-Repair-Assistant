@@ -129,6 +129,10 @@ def env_prefix(runtime_env):
     return " ".join(parts)
 
 
+def export_env_commands(runtime_env):
+    return "; ".join(f"export {key}={shell_quote(value)}" for key, value in runtime_env.items())
+
+
 def runtime_env_for_country(country):
     runtime_env = dict(COUNTRIES[country]["runtime_env"])
     runtime_env.setdefault("WORKFLOW_CODE_ROOT", "/data/git/starrocks/workflow")
@@ -176,7 +180,7 @@ def source_env_command(country):
         "if [ -f .env.local ]; then "
         "echo '加载 .env.local'; set -a; source .env.local; set +a; "
         "else echo '未发现 .env.local，使用 n8n 内置变量'; fi; "
-        f"{env_prefix(runtime_env_for_country(country))}"
+        f"{export_env_commands(runtime_env_for_country(country))}; "
     )
 
 
