@@ -54,8 +54,8 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                     self.assertIn("/root/Global-Intelligent-Alarm-Repair-Assistant", command)
                     self.assertIn("git clone", command)
                     self.assertIn("Global-Intelligent-Alarm-Repair-Assistant.git", command)
-                    self.assertIn("git fetch origin master", command)
-                    self.assertIn("git reset --hard origin/master", command)
+                    self.assertNotIn("git fetch origin master", command)
+                    self.assertNotIn("git reset --hard origin/master", command)
                     self.assertIn("APP_COUNTRY=", command)
                     self.assertIn("WORKFLOW_CODE_ROOT=", command)
                     self.assertIn("WORKFLOW_CODE_COUNTRY=", command)
@@ -75,6 +75,7 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                 for command in relevant:
                     self.assertIn("git clone", command)
                     self.assertIn("Global-Intelligent-Alarm-Repair-Assistant.git", command)
+                    self.assertIn("git remote set-url origin", command)
                     self.assertIn("git fetch origin master", command)
                     self.assertIn("git reset --hard origin/master", command)
 
@@ -106,8 +107,9 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                 ]
                 self.assertGreaterEqual(len(relevant), 1)
                 for command in relevant:
-                    self.assertIn(f"/tmp/intelligent_alarm_repair_{country}.lock", command)
-                    self.assertIn("flock -n", command)
+                    self.assertIn(f"/tmp/intelligent_alarm_repair_{country}.lockdir", command)
+                    self.assertIn("mkdir \"$LOCK_DIR\"", command)
+                    self.assertNotIn("flock -n", command)
                     self.assertIn("已有智能修复任务运行中，跳过本次执行", command)
                     self.assertIn("REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS=", command)
                     self.assertIn("'300'", command)

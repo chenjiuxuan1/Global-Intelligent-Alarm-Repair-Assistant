@@ -149,14 +149,19 @@ def remote(country, inner_command):
     return f"{cfg['ssh']} {shell_quote(inner_command)}"
 
 
-def ensure_platform_repo_command():
+def ensure_platform_repo_command(update=False):
+    update_command = (
+        f" && git remote set-url origin {shell_quote(PLATFORM_REPO_URL)}"
+        " && git fetch origin master && git reset --hard origin/master"
+        if update
+        else ""
+    )
     return (
         f"if [ ! -d {shell_quote(PLATFORM_REPO)} ]; then "
         f"git clone {shell_quote(PLATFORM_REPO_URL)} {shell_quote(PLATFORM_REPO)}; "
         "fi && "
-        f"cd {shell_quote(PLATFORM_REPO)} && "
-        f"git remote set-url origin {shell_quote(PLATFORM_REPO_URL)} && "
-        "git fetch origin master && git reset --hard origin/master"
+        f"cd {shell_quote(PLATFORM_REPO)}"
+        f"{update_command}"
     )
 
 
@@ -165,7 +170,7 @@ def platform_command(country, body):
 
 
 def pull_command(country):
-    return remote(country, f"{ensure_platform_repo_command()} && git log -1 --oneline")
+    return remote(country, f"{ensure_platform_repo_command(update=True)} && git log -1 --oneline")
 
 
 def check_command(country):
@@ -174,20 +179,12 @@ def check_command(country):
 
 def repair_command(country, unbuffered=False):
     python = "python3 -u" if unbuffered else "python3"
-    lock_file = f"/tmp/intelligent_alarm_repair_{country}.lock"
+    lock_dir = f"/tmp/intelligent_alarm_repair_{country}.lockdir"
     body = (
-        f"LOCK_FILE={shell_quote(lock_file)}; "
-        "if command -v flock >/dev/null 2>&1; then "
-        f"flock -n -E 75 \"$LOCK_FILE\" {python} core/repair_strict_7step.py; "
-        "code=$?; "
-        "if [ \"$code\" = \"75\" ]; then echo '已有智能修复任务运行中，跳过本次执行'; exit 0; fi; "
-        "exit \"$code\"; "
-        "else "
-        "LOCK_DIR=\"${LOCK_FILE}.dir\"; "
+        f"LOCK_DIR={shell_quote(lock_dir)}; "
         "if ! mkdir \"$LOCK_DIR\" 2>/dev/null; then echo '已有智能修复任务运行中，跳过本次执行'; exit 0; fi; "
         "trap \"rmdir \\\"$LOCK_DIR\\\"\" EXIT; "
-        f"{python} core/repair_strict_7step.py; "
-        "fi"
+        f"{python} core/repair_strict_7step.py"
     )
     return remote(country, platform_command(country, body))
 
