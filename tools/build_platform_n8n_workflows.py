@@ -133,6 +133,7 @@ def runtime_env_for_country(country):
     runtime_env = dict(COUNTRIES[country]["runtime_env"])
     runtime_env.setdefault("WORKFLOW_CODE_ROOT", "/data/git/starrocks/workflow")
     runtime_env.setdefault("WORKFLOW_CODE_COUNTRY", country)
+    runtime_env.setdefault("REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS", "300")
     return runtime_env
 
 
@@ -173,7 +174,22 @@ def check_command(country):
 
 def repair_command(country, unbuffered=False):
     python = "python3 -u" if unbuffered else "python3"
-    return remote(country, platform_command(country, f"{python} core/repair_strict_7step.py"))
+    lock_file = f"/tmp/intelligent_alarm_repair_{country}.lock"
+    body = (
+        f"LOCK_FILE={shell_quote(lock_file)}; "
+        "if command -v flock >/dev/null 2>&1; then "
+        f"flock -n -E 75 \"$LOCK_FILE\" {python} core/repair_strict_7step.py; "
+        "code=$?; "
+        "if [ \"$code\" = \"75\" ]; then echo '已有智能修复任务运行中，跳过本次执行'; exit 0; fi; "
+        "exit \"$code\"; "
+        "else "
+        "LOCK_DIR=\"${LOCK_FILE}.dir\"; "
+        "if ! mkdir \"$LOCK_DIR\" 2>/dev/null; then echo '已有智能修复任务运行中，跳过本次执行'; exit 0; fi; "
+        "trap \"rmdir \\\"$LOCK_DIR\\\"\" EXIT; "
+        f"{python} core/repair_strict_7step.py; "
+        "fi"
+    )
+    return remote(country, platform_command(country, body))
 
 
 def cn_external_command(command):

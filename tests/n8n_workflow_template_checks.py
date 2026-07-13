@@ -95,6 +95,23 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
             self.assertIn("DS_WORKFLOW_LIST_PAGE_SIZE=", command)
             self.assertIn("'20'", command)
 
+    def test_repair_commands_skip_when_same_country_repair_is_running(self):
+        for display, (country, _) in EXPECTED.items():
+            with self.subTest(display=display):
+                workflow = self.load_template(display)
+                relevant = [
+                    command
+                    for name, command in self.commands(workflow)
+                    if name in {"智能修复", "智能修复1"}
+                ]
+                self.assertGreaterEqual(len(relevant), 1)
+                for command in relevant:
+                    self.assertIn(f"/tmp/intelligent_alarm_repair_{country}.lock", command)
+                    self.assertIn("flock -n", command)
+                    self.assertIn("已有智能修复任务运行中，跳过本次执行", command)
+                    self.assertIn("REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS=", command)
+                    self.assertIn("'300'", command)
+
     def test_templates_do_not_embed_known_inline_secrets(self):
         secret_patterns = [
             re.compile(r"DS_TOKEN=[a-zA-Z0-9]{16,}"),
