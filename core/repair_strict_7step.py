@@ -67,6 +67,7 @@ WORKFLOW_CODE_COUNTRY = os.environ.get('WORKFLOW_CODE_COUNTRY', os.environ.get('
 DS_API_GET_TIMEOUT_SECONDS = int(os.environ.get('DS_API_GET_TIMEOUT_SECONDS', '15'))
 DS_API_GET_RETRY_COUNT = int(os.environ.get('DS_API_GET_RETRY_COUNT', os.environ.get('DS_API_RETRY_COUNT', '1')))
 DS_WORKFLOW_LIST_PAGE_SIZE = int(os.environ.get('DS_WORKFLOW_LIST_PAGE_SIZE', '100'))
+DS_WORKFLOW_LIST_MAX_SECONDS = int(os.environ.get('DS_WORKFLOW_LIST_MAX_SECONDS', '0'))
 
 # 维护任务关键词（排除）
 MAINTENANCE_KEYWORDS = ['补充', '删除', '清理', '修复', '历史', '冗余', '临时', 'test', 'copy', '手插入']
@@ -380,8 +381,15 @@ def get_workflow_definition_list():
     """兼容 DS 3.3 workflow-definition 与 DS 3.2 process-definition 列表接口，并自动翻页"""
     endpoint_templates = _get_definition_list_endpoint_templates()
     last_msg = ""
+    started_at = time.time()
+
+    def budget_exceeded():
+        return DS_WORKFLOW_LIST_MAX_SECONDS > 0 and (time.time() - started_at) >= DS_WORKFLOW_LIST_MAX_SECONDS
 
     for endpoint_template in endpoint_templates:
+        if budget_exceeded():
+            return False, {}, f"获取工作流列表超过{DS_WORKFLOW_LIST_MAX_SECONDS}秒预算: {last_msg or 'timeout budget exceeded'}"
+
         if "{page_no}" not in endpoint_template:
             endpoint = endpoint_template.format(project_code=PROJECT_CODE)
             success, data, msg = ds_api_get(endpoint)
@@ -402,6 +410,8 @@ def get_workflow_definition_list():
         merged_total_list = []
 
         while page_no <= total_pages:
+            if budget_exceeded():
+                return False, {}, f"获取工作流列表超过{DS_WORKFLOW_LIST_MAX_SECONDS}秒预算: {last_msg or 'timeout budget exceeded'}"
             endpoint = endpoint_template.format(project_code=PROJECT_CODE, page_no=page_no)
             success, data, msg = ds_api_get(endpoint)
             if not success:
@@ -2593,11 +2603,17 @@ def summarize_repair_outcome(alerts, completed_tasks, failed_tasks, manual_revie
 
     for alert in initial_alerts:
         table = alert['table']
-        if table in completed_by_table or table in failed_by_table:
+        failed_task = failed_by_table.get(table, {})
+        failed_task_started = bool(
+            failed_task.get('instance_id')
+            or failed_task.get('start_response_id')
+            or failed_task.get('resolved_instance_id')
+        )
+        if table in completed_by_table or failed_task_started:
             rerun_task = dict(alert)
             rerun_task.update(completed_by_table.get(table, {}))
-            if table in failed_by_table:
-                rerun_task.update(failed_by_table[table])
+            if failed_task_started:
+                rerun_task.update(failed_task)
             rerun_tasks.append(rerun_task)
 
         if table in failed_by_table:

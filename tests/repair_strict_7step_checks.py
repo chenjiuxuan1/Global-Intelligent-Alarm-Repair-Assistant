@@ -3166,6 +3166,28 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(data["totalList"], [{"code": "wf-cn"}])
         self.assertEqual(len(seen_endpoints), 1)
 
+    def test_get_workflow_definition_list_stops_after_configured_time_budget(self):
+        module = load_module()
+        module.DS_WORKFLOW_LIST_MAX_SECONDS = 30
+        calls = []
+        ticks = iter([0, 0, 0, 31])
+
+        def fake_time():
+            return next(ticks)
+
+        def fake_ds_api_get(endpoint):
+            calls.append(endpoint)
+            return False, {}, "<urlopen error timed out>"
+
+        with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get), \
+            mock.patch.object(module.time, "time", side_effect=fake_time):
+            success, data, msg = module.get_workflow_definition_list()
+
+        self.assertFalse(success)
+        self.assertEqual(data, {})
+        self.assertEqual(len(calls), 1)
+        self.assertIn("超过30秒预算", msg)
+
     def test_ds_api_get_retries_timeout_errors(self):
         module = load_module()
         module.DS_API_GET_TIMEOUT_SECONDS = 30
@@ -3224,6 +3246,36 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(tasks[0]["workflow_name"], "未找到")
         self.assertIn("获取工作流列表失败", tasks[0]["error"])
         self.assertIn("timed out", tasks[0]["error"])
+
+    def test_summarize_repair_outcome_does_not_report_skipped_no_workflow_as_rerun(self):
+        module = load_module()
+        alerts = [
+            {
+                "id": 1,
+                "table": "dwd_asset_auto_withhold",
+                "dt": "2026-07-05",
+                "diff": -1530095,
+            }
+        ]
+        failed_tasks = [
+            {
+                "table": "dwd_asset_auto_withhold",
+                "status": "skipped_no_workflow",
+                "error": "获取工作流列表失败，无法定位修复节点: <urlopen error timed out>",
+            }
+        ]
+
+        summary = module.summarize_repair_outcome(
+            alerts,
+            completed_tasks=[],
+            failed_tasks=failed_tasks,
+            manual_review_tasks=[],
+            remaining_tables={"dwd_asset_auto_withhold"},
+        )
+
+        self.assertEqual(summary["rerun_tasks"], [])
+        self.assertEqual(len(summary["remaining_tasks"]), 1)
+        self.assertIn("获取工作流列表失败", summary["remaining_tasks"][0]["error"])
 
     def test_get_workflow_definition_detail_falls_back_to_workflow_definition_when_process_style_is_configured(self):
         module = load_module()

@@ -99,11 +99,16 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
         self.assertGreaterEqual(len(relevant), 2)
         for command in relevant:
             self.assertIn("DS_API_GET_TIMEOUT_SECONDS=", command)
-            self.assertIn("'30'", command)
+            self.assertIn("'10'", command)
             self.assertIn("DS_API_GET_RETRY_COUNT=", command)
-            self.assertIn("'2'", command)
+            self.assertIn("'1'", command)
             self.assertIn("DS_WORKFLOW_LIST_PAGE_SIZE=", command)
             self.assertIn("'20'", command)
+            self.assertIn("DS_WORKFLOW_LIST_MAX_SECONDS=", command)
+            self.assertIn("'30'", command)
+            self.assertIn("PRIORITY_WORKFLOW_CODES_JSON=", command)
+            self.assertIn("158514956979200", command)
+            self.assertIn("158514957494272", command)
 
     def test_repair_commands_skip_when_same_country_repair_is_running(self):
         for display, (country, _) in EXPECTED.items():
