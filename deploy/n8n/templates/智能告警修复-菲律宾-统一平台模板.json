@@ -20,7 +20,7 @@
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "ssh root@10.20.10.12 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"' WORKFLOW_CODE_COUNTRY='\"'\"'ph'\"'\"' python3 core/repair_strict_7step.py'"
+        "command": "ssh root@10.20.10.12 'if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; fi && cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' && git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' && git fetch origin master && git reset --hard origin/master && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"' WORKFLOW_CODE_COUNTRY='\"'\"'ph'\"'\"' python3 core/repair_strict_7step.py'"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
@@ -40,7 +40,7 @@
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "ssh root@10.20.10.12 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && git fetch origin && git reset --hard origin/master'"
+        "command": "ssh root@10.20.10.12 'if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; fi && cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' && git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' && git fetch origin master && git reset --hard origin/master && git log -1 --oneline'"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
@@ -60,7 +60,7 @@
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "ssh root@10.20.10.12 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"' WORKFLOW_CODE_COUNTRY='\"'\"'ph'\"'\"' python3 core/repair_strict_7step.py'"
+        "command": "ssh root@10.20.10.12 'if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; fi && cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' && git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' && git fetch origin master && git reset --hard origin/master && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"' WORKFLOW_CODE_COUNTRY='\"'\"'ph'\"'\"' python3 core/repair_strict_7step.py'"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
@@ -91,7 +91,7 @@
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "ssh root@10.20.10.12 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"' WORKFLOW_CODE_COUNTRY='\"'\"'ph'\"'\"' python3 tools/task_execution_checker.py --task repair'"
+        "command": "ssh root@10.20.10.12 'if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; fi && cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' && git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' && git fetch origin master && git reset --hard origin/master && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"' WORKFLOW_CODE_COUNTRY='\"'\"'ph'\"'\"' python3 tools/task_execution_checker.py --task repair'"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
@@ -111,7 +111,7 @@
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "ssh root@10.20.10.12 'cd /root/Global-Intelligent-Alarm-Repair-Assistant && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"' WORKFLOW_CODE_COUNTRY='\"'\"'ph'\"'\"' python3 tools/task_execution_checker.py --task repair'"
+        "command": "ssh root@10.20.10.12 'if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; fi && cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' && git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' && git fetch origin master && git reset --hard origin/master && set -a && [ -f .env.local ] && source .env.local; set +a && APP_COUNTRY='\"'\"'ph'\"'\"' APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' TV_API_URL='\"'\"'https://tv-service-alert.kuainiu.chat/alert/v2/array'\"'\"' TV_MENTIONS='\"'\"'simontang@kn.group,jiangchuanchen@kn.group'\"'\"' WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"' WORKFLOW_CODE_COUNTRY='\"'\"'ph'\"'\"' python3 tools/task_execution_checker.py --task repair'"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,

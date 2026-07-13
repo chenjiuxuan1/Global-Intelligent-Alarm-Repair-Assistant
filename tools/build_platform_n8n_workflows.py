@@ -15,6 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = REPO_ROOT / "deploy" / "n8n" / "templates"
 PLATFORM_REPO = "/root/Global-Intelligent-Alarm-Repair-Assistant"
+PLATFORM_REPO_URL = "https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git"
 
 
 COUNTRIES = {
@@ -147,13 +148,23 @@ def remote(country, inner_command):
     return f"{cfg['ssh']} {shell_quote(inner_command)}"
 
 
+def ensure_platform_repo_command():
+    return (
+        f"if [ ! -d {shell_quote(PLATFORM_REPO)} ]; then "
+        f"git clone {shell_quote(PLATFORM_REPO_URL)} {shell_quote(PLATFORM_REPO)}; "
+        "fi && "
+        f"cd {shell_quote(PLATFORM_REPO)} && "
+        f"git remote set-url origin {shell_quote(PLATFORM_REPO_URL)} && "
+        "git fetch origin master && git reset --hard origin/master"
+    )
+
+
 def platform_command(country, body):
-    return f"cd {PLATFORM_REPO} && {source_env_prefix(country)} {body}"
+    return f"{ensure_platform_repo_command()} && {source_env_prefix(country)} {body}"
 
 
 def pull_command(country):
-    cfg = COUNTRIES[country]
-    return remote(country, f"cd {PLATFORM_REPO} && {cfg['pull']}")
+    return remote(country, f"{ensure_platform_repo_command()} && git log -1 --oneline")
 
 
 def check_command(country):

@@ -52,11 +52,31 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                 self.assertGreaterEqual(len(relevant), 2)
                 for command in relevant:
                     self.assertIn("/root/Global-Intelligent-Alarm-Repair-Assistant", command)
+                    self.assertIn("git clone", command)
+                    self.assertIn("Global-Intelligent-Alarm-Repair-Assistant.git", command)
+                    self.assertIn("git fetch origin master", command)
+                    self.assertIn("git reset --hard origin/master", command)
                     self.assertIn("APP_COUNTRY=", command)
                     self.assertIn("WORKFLOW_CODE_ROOT=", command)
                     self.assertIn("WORKFLOW_CODE_COUNTRY=", command)
                     self.assertIn("/data/git/starrocks/workflow", command)
                     self.assertIn(country, command)
+
+    def test_pull_commands_create_or_update_platform_repo(self):
+        for display in EXPECTED:
+            with self.subTest(display=display):
+                workflow = self.load_template(display)
+                relevant = [
+                    command
+                    for name, command in self.commands(workflow)
+                    if name == "拉取最新代码"
+                ]
+                self.assertGreaterEqual(len(relevant), 1)
+                for command in relevant:
+                    self.assertIn("git clone", command)
+                    self.assertIn("Global-Intelligent-Alarm-Repair-Assistant.git", command)
+                    self.assertIn("git fetch origin master", command)
+                    self.assertIn("git reset --hard origin/master", command)
 
     def test_china_commands_use_more_tolerant_ds_list_settings(self):
         workflow = self.load_template("中国")
