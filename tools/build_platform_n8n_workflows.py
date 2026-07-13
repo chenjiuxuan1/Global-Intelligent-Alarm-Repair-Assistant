@@ -39,7 +39,7 @@ COUNTRIES = {
             "DS_API_GET_RETRY_COUNT": "1",
             "DS_WORKFLOW_LIST_PAGE_SIZE": "20",
             "DS_WORKFLOW_LIST_MAX_SECONDS": "30",
-            "DS_PRIORITY_WORKFLOW_MAX_SECONDS": "20",
+            "DS_PRIORITY_WORKFLOW_MAX_SECONDS": "5",
             "DB_HOST": "rm-uf60amp9vz996n520.mysql.rds.aliyuncs.com",
             "DB_PORT": "3306",
             "DB_USER": "e_ds",
