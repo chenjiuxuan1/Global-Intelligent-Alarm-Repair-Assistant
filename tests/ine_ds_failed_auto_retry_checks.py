@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from tools import ine_ds_failed_auto_retry as retry
+from tools import ds_failed_auto_retry as generic_retry
 
 
 class IneDsFailedAutoRetryChecks(unittest.TestCase):
@@ -124,6 +125,23 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         encoded = base64.b64encode(json.dumps(raw).encode("utf-8")).decode("ascii")
 
         self.assertEqual(retry._decode_payload(encoded), raw)
+
+    def test_generic_retry_uses_requested_country_in_alert_and_gateway(self):
+        raw = {"project_code": "100", "instance_id": "200"}
+        alert = generic_retry.normalize_alert_payload(raw, country="mx")
+
+        self.assertEqual(alert["country"], "mx")
+        self.assertEqual(alert["retry_key"], "mx:100:200")
+        self.assertTrue(str(generic_retry.default_state_file("mx")).endswith("mx_ds_failed_retry_counts.json"))
+
+    def test_generic_retry_normalizes_id_to_ine(self):
+        alert = generic_retry.normalize_alert_payload(
+            {"country": "id", "project_code": "100", "instance_id": "200"},
+            country="id",
+        )
+
+        self.assertEqual(alert["country"], "ine")
+        self.assertEqual(alert["retry_key"], "ine:100:200")
 
 
 if __name__ == "__main__":
