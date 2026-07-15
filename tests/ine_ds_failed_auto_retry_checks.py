@@ -1,8 +1,10 @@
 import base64
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools import ine_ds_failed_auto_retry as retry
 from tools import ds_failed_auto_retry as generic_retry
@@ -142,6 +144,94 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
 
         self.assertEqual(alert["country"], "ine")
         self.assertEqual(alert["retry_key"], "ine:100:200")
+
+    def test_generic_retry_normalizes_ph_ds_alert_array_payload(self):
+        raw = [
+            {
+                "projectCode": 15843450427744,
+                "projectName": "菲律宾数仓-正式环境",
+                "workflowInstanceId": 2004745,
+                "workflowDefinitionCode": 15845044707680,
+                "workflowInstanceName": "菲律宾-数仓工作流（1D）-20260715122501017",
+                "commandType": "START_FAILURE_TASK_PROCESS",
+                "workflowExecutionStatus": "FAILURE",
+                "modifyBy": "bigdata",
+                "recovery": "NO",
+                "runTimes": 2,
+                "workflowStartTime": "2026-07-15 12:25:01",
+                "workflowEndTime": "2026-07-15 12:49:35",
+                "workflowHost": "10.20.10.12:5678",
+            }
+        ]
+
+        alert = generic_retry.normalize_alert_payload(raw, country="ph")
+
+        self.assertEqual(alert["country"], "ph")
+        self.assertEqual(alert["project_code"], "15843450427744")
+        self.assertEqual(alert["project_name"], "菲律宾数仓-正式环境")
+        self.assertEqual(alert["instance_id"], "2004745")
+        self.assertEqual(alert["workflow_definition_code"], "15845044707680")
+        self.assertEqual(alert["workflow_name"], "菲律宾-数仓工作流（1D）-20260715122501017")
+        self.assertEqual(alert["workflow_execution_status"], "FAILURE")
+        self.assertEqual(alert["workflow_start_time"], "2026-07-15 12:25:01")
+        self.assertEqual(alert["workflow_end_time"], "2026-07-15 12:49:35")
+        self.assertEqual(alert["workflow_host"], "10.20.10.12:5678")
+        self.assertEqual(alert["run_times"], "2")
+        self.assertEqual(alert["retry_key"], "ph:15843450427744:2004745")
+
+    def test_generic_retry_uses_ph_tv_destination_by_default(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = generic_retry.get_country_tv_config("ph")
+
+        self.assertEqual(config["url"], "https://tv-service-alert.kuainiu.chat/alert")
+        self.assertEqual(config["bot_id"], "14470d0e-73e2-4411-9306-4cea9a371264")
+        self.assertEqual(config["app_id"], "")
+
+    def test_generic_retry_country_tv_env_override_wins(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "DS_FAILED_TV_URL": "https://default.example/alert",
+                "DS_FAILED_TV_BOT_ID": "default-bot",
+                "DS_FAILED_TV_URL_PH": "https://ph.example/alert",
+                "DS_FAILED_TV_BOT_ID_PH": "ph-bot",
+                "DS_FAILED_TV_APP_ID_PH": "ph-app",
+            },
+            clear=True,
+        ):
+            config = generic_retry.get_country_tv_config("ph")
+
+        self.assertEqual(config["url"], "https://ph.example/alert")
+        self.assertEqual(config["bot_id"], "ph-bot")
+        self.assertEqual(config["app_id"], "ph-app")
+
+    def test_generic_retry_failure_message_keeps_ds_instance_context(self):
+        alert = generic_retry.normalize_alert_payload(
+            [
+                {
+                    "projectCode": 15843450427744,
+                    "projectName": "菲律宾数仓-正式环境",
+                    "workflowInstanceId": 2004745,
+                    "workflowDefinitionCode": 15845044707680,
+                    "workflowInstanceName": "菲律宾-数仓工作流（1D）-20260715122501017",
+                    "workflowStartTime": "2026-07-15 12:25:01",
+                    "workflowEndTime": "2026-07-15 12:49:35",
+                    "workflowHost": "10.20.10.12:5678",
+                    "runTimes": 2,
+                }
+            ],
+            country="ph",
+        )
+
+        message = generic_retry.build_failure_message(alert, 3, "FAILURE", {})
+
+        self.assertIn("菲律宾 DolphinScheduler 失败任务自动重跑未恢复", message)
+        self.assertIn("重跑次数: 3", message)
+        self.assertIn("项目名称: 菲律宾数仓-正式环境", message)
+        self.assertIn("实例ID: 2004745", message)
+        self.assertIn("工作流定义编码: 15845044707680", message)
+        self.assertIn("工作流: 菲律宾-数仓工作流（1D）-20260715122501017", message)
+        self.assertIn("执行机器: 10.20.10.12:5678", message)
 
 
 if __name__ == "__main__":

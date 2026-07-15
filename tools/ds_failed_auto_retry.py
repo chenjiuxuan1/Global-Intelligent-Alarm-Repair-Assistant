@@ -30,6 +30,13 @@ DEFAULT_TV_URL = "https://tv-service-alert.kuainiu.chat/alert"
 DEFAULT_TV_BOT_ID = "fccd2880-baea-42aa-9631-a74ac5d951eb"
 DEFAULT_TV_APP_ID = "alert"
 DEFAULT_COUNTRY = "ine"
+COUNTRY_TV_DEFAULTS = {
+    "ph": {
+        "url": "https://tv-service-alert.kuainiu.chat/alert",
+        "bot_id": "14470d0e-73e2-4411-9306-4cea9a371264",
+        "app_id": "",
+    },
+}
 COUNTRY_NAMES = {
     "cn": "中国",
     "th": "泰国",
@@ -100,6 +107,26 @@ def normalize_country(country: str) -> str:
     return normalized or DEFAULT_COUNTRY
 
 
+def get_country_tv_config(country: str) -> dict[str, str]:
+    normalized = normalize_country(country)
+    suffix = normalized.upper()
+    defaults = COUNTRY_TV_DEFAULTS.get(normalized, {})
+    default_url = defaults["url"] if "url" in defaults else DEFAULT_TV_URL
+    default_bot_id = defaults["bot_id"] if "bot_id" in defaults else DEFAULT_TV_BOT_ID
+    default_app_id = defaults["app_id"] if "app_id" in defaults else DEFAULT_TV_APP_ID
+    return {
+        "url": os.getenv(f"DS_FAILED_TV_URL_{suffix}")
+        or os.getenv("DS_FAILED_TV_URL")
+        or default_url,
+        "bot_id": os.getenv(f"DS_FAILED_TV_BOT_ID_{suffix}")
+        or os.getenv("DS_FAILED_TV_BOT_ID")
+        or default_bot_id,
+        "app_id": os.getenv(f"DS_FAILED_TV_APP_ID_{suffix}")
+        or os.getenv("DS_FAILED_TV_APP_ID")
+        or default_app_id,
+    }
+
+
 def default_state_file(country: str) -> Path:
     return ROOT / "auto_repair_records" / f"{normalize_country(country)}_ds_failed_retry_counts.json"
 
@@ -129,6 +156,8 @@ def normalize_alert_payload(raw: Any, country: str = DEFAULT_COUNTRY) -> dict[st
         "processInstanceID",
         "process_instance_code",
         "processInstanceCode",
+        "workflow_instance_id",
+        "workflowInstanceId",
     )
     task_instance_id = first("task_instance_id", "taskInstanceId", "taskInstanceID")
 
@@ -147,24 +176,57 @@ def normalize_alert_payload(raw: Any, country: str = DEFAULT_COUNTRY) -> dict[st
             [
                 r"process[_\s-]*instance[_\s-]*(?:id|code)[\"'\s:=：]+(\d+)",
                 r"processInstance(?:Id|Code)[\"'\s:=：]+(\d+)",
+                r"workflowInstanceId[\"'\s:=：]+(\d+)",
+                r"workflow[_\s-]*instance[_\s-]*id[\"'\s:=：]+(\d+)",
                 r"instance[_\s-]*id[\"'\s:=：]+(\d+)",
                 r"实例(?:ID|编码)?[\"'\s:=：]+(\d+)",
             ],
         )
 
     ds_token = first("ds_token", "dsToken", "token", "dolphinscheduler_token")
-    workflow_name = first("workflow_name", "process_definition_name", "processDefinitionName", "processName")
+    workflow_name = first(
+        "workflow_name",
+        "workflow_instance_name",
+        "workflowInstanceName",
+        "process_definition_name",
+        "processDefinitionName",
+        "processName",
+    )
     task_name = first("task_name", "taskName", "failed_task_name", "failedTaskName")
+    project_name = first("project_name", "projectName")
+    workflow_definition_code = first(
+        "workflow_definition_code",
+        "workflowDefinitionCode",
+        "process_definition_code",
+        "processDefinitionCode",
+    )
+    workflow_execution_status = first(
+        "workflow_execution_status",
+        "workflowExecutionStatus",
+        "execution_status",
+        "executionStatus",
+    )
+    workflow_start_time = first("workflow_start_time", "workflowStartTime", "start_time", "startTime")
+    workflow_end_time = first("workflow_end_time", "workflowEndTime", "end_time", "endTime")
+    workflow_host = first("workflow_host", "workflowHost", "host")
+    run_times = first("run_times", "runTimes")
 
     country = normalize_country(country or first("country", "country_code", "countryCode") or DEFAULT_COUNTRY)
     retry_key = f"{country}:{project_code}:{instance_id}"
     return {
         "country": country,
         "project_code": project_code,
+        "project_name": project_name,
         "instance_id": instance_id,
         "process_instance_id": instance_id,
         "task_instance_id": task_instance_id,
+        "workflow_definition_code": workflow_definition_code,
         "workflow_name": workflow_name,
+        "workflow_execution_status": workflow_execution_status,
+        "workflow_start_time": workflow_start_time,
+        "workflow_end_time": workflow_end_time,
+        "workflow_host": workflow_host,
+        "run_times": run_times,
         "task_name": task_name,
         "ds_token": ds_token,
         "retry_key": retry_key,
@@ -270,12 +332,13 @@ def extract_instance_state(response: dict[str, Any]) -> str:
     return "UNKNOWN"
 
 
-def send_tv_alert(message: str, url: str, bot_id: str, app_id: str) -> dict[str, Any]:
+def send_tv_alert(message: str, url: str, bot_id: str, app_id: str = "") -> dict[str, Any]:
     payload = {
-        "appId": app_id,
         "botId": bot_id,
         "message": message,
     }
+    if app_id:
+        payload["appId"] = app_id
     req = urllib.request.Request(
         url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -306,10 +369,22 @@ def build_failure_message(alert: dict[str, Any], attempts: int, state: str, last
         f"项目编码: {alert.get('project_code') or '-'}",
         f"实例ID: {alert.get('instance_id') or '-'}",
     ]
+    if alert.get("project_name"):
+        lines.append(f"项目名称: {alert['project_name']}")
+    if alert.get("workflow_definition_code"):
+        lines.append(f"工作流定义编码: {alert['workflow_definition_code']}")
     if alert.get("workflow_name"):
         lines.append(f"工作流: {alert['workflow_name']}")
     if alert.get("task_name"):
         lines.append(f"失败任务: {alert['task_name']}")
+    if alert.get("workflow_start_time"):
+        lines.append(f"开始时间: {alert['workflow_start_time']}")
+    if alert.get("workflow_end_time"):
+        lines.append(f"结束时间: {alert['workflow_end_time']}")
+    if alert.get("workflow_host"):
+        lines.append(f"执行机器: {alert['workflow_host']}")
+    if alert.get("run_times"):
+        lines.append(f"DS运行次数: {alert['run_times']}")
     stderr = str(last_result.get("stderr") or "").strip()
     if stderr:
         lines.append(f"网关错误: {stderr[:500]}")
@@ -335,14 +410,14 @@ def auto_retry(
             country=alert.get("country") or DEFAULT_COUNTRY,
         )
     )
-    tv_sender = tv_sender or (
-        lambda message: send_tv_alert(
+    if tv_sender is None:
+        tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
+        tv_sender = lambda message: send_tv_alert(
             message,
-            os.getenv("DS_FAILED_TV_URL", DEFAULT_TV_URL),
-            os.getenv("DS_FAILED_TV_BOT_ID", DEFAULT_TV_BOT_ID),
-            os.getenv("DS_FAILED_TV_APP_ID", DEFAULT_TV_APP_ID),
+            tv_config["url"],
+            tv_config["bot_id"],
+            tv_config["app_id"],
         )
-    )
 
     errors = []
     if not alert.get("project_code"):
