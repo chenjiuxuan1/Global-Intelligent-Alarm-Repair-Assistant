@@ -44,16 +44,266 @@
     },
     {
       "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.country}}",
+                    "rightValue": "cn",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.country}}",
+                    "rightValue": "ph",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.country}}",
+                    "rightValue": "ine",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.country}}",
+                    "rightValue": "mx",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.country}}",
+                    "rightValue": "th",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.country}}",
+                    "rightValue": "pk",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f089cde0-ef9d-4090-b0f4-216d0d30583f",
+      "name": "按国家分流到跳板机",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        700,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
         "command": "={{$json.command}}"
       },
-      "id": "be661d35-d66b-47c5-8b9f-f78959dcd8d5",
-      "name": "对应国家启动后台重跑",
+      "id": "ds-failed-auto-rerun-cn",
+      "name": "中国启动后台重跑",
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
         860,
-        260
-      ]
+        -180
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "wGL20YUQ7ZpN1xRA",
+          "name": "中国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "={{$json.command}}"
+      },
+      "id": "ds-failed-auto-rerun-ph",
+      "name": "菲律宾启动后台重跑",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        860,
+        -60
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "MQWXoKIQxg8ae2Nt",
+          "name": "菲律宾跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "={{$json.command}}"
+      },
+      "id": "ds-failed-auto-rerun-ine",
+      "name": "印尼启动后台重跑",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        860,
+        60
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SyHW5nXUCnuULr2c",
+          "name": "印尼跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "={{$json.command}}"
+      },
+      "id": "ds-failed-auto-rerun-mx",
+      "name": "墨西哥启动后台重跑",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        860,
+        180
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "7oQDoS8H2buTjr7H",
+          "name": "墨西哥跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "={{$json.command}}"
+      },
+      "id": "ds-failed-auto-rerun-th",
+      "name": "泰国启动后台重跑",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        860,
+        300
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SliSXhrkW6tiEFFo",
+          "name": "泰国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "={{$json.command}}"
+      },
+      "id": "ds-failed-auto-rerun-pk",
+      "name": "巴基斯坦启动后台重跑",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        860,
+        420
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "W8NbqcmBWoI5MZ3s",
+          "name": "巴基斯坦跳板机"
+        }
+      }
     },
     {
       "parameters": {
@@ -64,8 +314,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1120,
-        260
+        1140,
+        140
       ]
     }
   ],
@@ -86,14 +336,115 @@
       "main": [
         [
           {
-            "node": "对应国家启动后台重跑",
+            "node": "按国家分流到跳板机",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "对应国家启动后台重跑": {
+    "按国家分流到跳板机": {
+      "main": [
+        [
+          {
+            "node": "中国启动后台重跑",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "菲律宾启动后台重跑",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "印尼启动后台重跑",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "墨西哥启动后台重跑",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "泰国启动后台重跑",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "巴基斯坦启动后台重跑",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "中国启动后台重跑": {
+      "main": [
+        [
+          {
+            "node": "整理响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "菲律宾启动后台重跑": {
+      "main": [
+        [
+          {
+            "node": "整理响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "印尼启动后台重跑": {
+      "main": [
+        [
+          {
+            "node": "整理响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "墨西哥启动后台重跑": {
+      "main": [
+        [
+          {
+            "node": "整理响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "泰国启动后台重跑": {
+      "main": [
+        [
+          {
+            "node": "整理响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "巴基斯坦启动后台重跑": {
       "main": [
         [
           {
@@ -109,7 +460,7 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "ds-failed-auto-rerun-all-countries-v1",
+  "versionId": "ds-failed-auto-rerun-all-countries-v2-jump-hosts",
   "meta": {
     "templateCredsSetupCompleted": true
   },

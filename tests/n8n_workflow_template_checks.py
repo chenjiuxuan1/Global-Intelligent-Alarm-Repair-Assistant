@@ -6,6 +6,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = REPO_ROOT / "deploy" / "n8n" / "templates"
+DS_FAILED_AUTO_RERUN = REPO_ROOT / "deploy" / "n8n" / "ds-failed-auto-rerun" / "各国-DS失败自动重跑统一入口.json"
 EXPECTED = {
     "中国": ("cn", "ds-quality-alert1"),
     "泰国": ("th", "78ec70e4-e362-4497-b9d1-f8d3f0bc2eca"),
@@ -162,6 +163,38 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
             for pattern in secret_patterns:
                 with self.subTest(path=path.name, pattern=pattern.pattern):
                     self.assertIsNone(pattern.search(text))
+
+    def test_ds_failed_auto_rerun_routes_to_country_jump_hosts(self):
+        workflow = json.loads(DS_FAILED_AUTO_RERUN.read_text(encoding="utf-8"))
+        nodes = {node["name"]: node for node in workflow["nodes"]}
+
+        self.assertIn("按国家分流到跳板机", nodes)
+        self.assertNotIn("对应国家启动后台重跑", nodes)
+        self.assertEqual(
+            workflow["connections"]["识别国家并构造命令"]["main"][0][0]["node"],
+            "按国家分流到跳板机",
+        )
+
+        expected_nodes = {
+            "中国启动后台重跑": "中国跳板机",
+            "菲律宾启动后台重跑": "菲律宾跳板机",
+            "印尼启动后台重跑": "印尼跳板机",
+            "墨西哥启动后台重跑": "墨西哥跳板机",
+            "泰国启动后台重跑": "泰国跳板机",
+            "巴基斯坦启动后台重跑": "巴基斯坦跳板机",
+        }
+        for node_name, credential_name in expected_nodes.items():
+            with self.subTest(node=node_name):
+                node = nodes[node_name]
+                self.assertEqual(node["parameters"]["command"], "={{$json.command}}")
+                self.assertEqual(
+                    node["credentials"]["sshPrivateKey"]["name"],
+                    credential_name,
+                )
+                self.assertEqual(
+                    workflow["connections"][node_name]["main"][0][0]["node"],
+                    "整理响应",
+                )
 
 
 if __name__ == "__main__":
