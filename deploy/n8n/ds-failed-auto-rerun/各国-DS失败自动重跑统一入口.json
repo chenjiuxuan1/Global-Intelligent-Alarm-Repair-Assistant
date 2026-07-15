@@ -67,21 +67,6 @@
         1120,
         260
       ]
-    },
-    {
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ $json }}",
-        "options": {}
-      },
-      "id": "f626420b-05bd-4de5-b703-ddcdd1ff099e",
-      "name": "返回Webhook",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [
-        1380,
-        260
-      ]
     }
   ],
   "pinData": {},
@@ -113,17 +98,6 @@
         [
           {
             "node": "整理响应",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "整理响应": {
-      "main": [
-        [
-          {
-            "node": "返回Webhook",
             "type": "main",
             "index": 0
           }
