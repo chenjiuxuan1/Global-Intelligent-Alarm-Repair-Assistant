@@ -5,8 +5,19 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "ds-failed-auto-rerun",
-        "responseMode": "responseNode",
-        "options": {}
+        "responseMode": "onReceived",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "responseData": "firstEntryJson"
       },
       "id": "a3512c1d-1048-47f7-9b40-34254f94257d",
       "name": "DS失败告警Webhook",
