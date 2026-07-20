@@ -1852,6 +1852,11 @@ def is_suspected_redundant_data(task):
         return False
 
 
+def is_dwb_table(task):
+    """DWB 告警直接按告警日期重跑，不应用数据量差异策略。"""
+    return str(task.get('table') or '').lower().startswith('dwb_')
+
+
 def build_redundant_data_manual_review_reason():
     """构造疑似冗余/底层少数场景的人工处理提示"""
     return '疑似当前层数据多于底层，未发现 delete 或 insert overwrite 覆盖逻辑，建议检查底层是否需要删数，并人工判断修复'
@@ -1975,7 +1980,7 @@ def build_forbidden_task_manual_review_reason(task):
 
 
 def apply_repair_strategy(tasks, strategy_state):
-    """应用修复策略：疑似冗余数据必须有覆盖/删除逻辑，且仅允许自动重跑一次。"""
+    """应用修复策略：DWB 直通；其他疑似冗余数据需安全重跑证据且仅重跑一次。"""
     runnable_tasks = []
     manual_review_tasks = []
 
@@ -1985,6 +1990,10 @@ def apply_repair_strategy(tasks, strategy_state):
             manual_task['status'] = 'skipped_manual_review'
             manual_task['error'] = build_forbidden_task_manual_review_reason(task)
             manual_review_tasks.append(manual_task)
+            continue
+
+        if is_dwb_table(task):
+            runnable_tasks.append(task)
             continue
 
         if not is_suspected_redundant_data(task):
@@ -2017,7 +2026,7 @@ def apply_repair_strategy(tasks, strategy_state):
 def record_redundant_retry_attempt(strategy_state, completed_tasks):
     """记录疑似冗余数据告警的首次自动重跑尝试"""
     for task in completed_tasks:
-        if not is_suspected_redundant_data(task):
+        if is_dwb_table(task) or not is_suspected_redundant_data(task):
             continue
 
         table_state = strategy_state.setdefault(task['table'], {})

@@ -2179,6 +2179,36 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(manual_review[0]["status"], "skipped_manual_review")
         self.assertIn("未发现 delete 或 insert overwrite", manual_review[0]["error"])
 
+    def test_apply_repair_strategy_always_allows_dwb_alert_regardless_of_negative_diff(self):
+        module = load_module()
+        task = {
+            "table": "dwb_asset_info",
+            "dt": "2026-07-20",
+            "diff": -1530095,
+            "task_flag": "YES",
+        }
+        strategy_state = {
+            "dwb_asset_info": {
+                "2026-07-20": {"redundant_retry_done": True}
+            }
+        }
+
+        runnable, manual_review = module.apply_repair_strategy([task], strategy_state)
+
+        self.assertEqual(runnable, [task])
+        self.assertEqual(manual_review, [])
+
+    def test_record_redundant_retry_attempt_ignores_dwb_alert(self):
+        module = load_module()
+        strategy_state = {}
+
+        module.record_redundant_retry_attempt(
+            strategy_state,
+            [{"table": "dwb_asset_info", "dt": "2026-07-20", "diff": -1}],
+        )
+
+        self.assertEqual(strategy_state, {})
+
     def test_apply_repair_strategy_requires_delete_or_overwrite_targeting_alert_table(self):
         module = load_module()
         with tempfile.TemporaryDirectory() as tmp:
