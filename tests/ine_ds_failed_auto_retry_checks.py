@@ -56,12 +56,17 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
 
     def test_auto_retry_recovers_after_first_retry(self):
         calls = []
+        tv_messages = []
 
         def gateway(action, token, payload, request_id):
             calls.append((action, payload["instance_id"], request_id))
             if action == "get_instance":
                 return {"ok": True, "stdout": {"success": True, "data": {"state": "SUCCESS"}}}
             return {"ok": True, "stdout": {"success": True}}
+
+        def tv_sender(message):
+            tv_messages.append(message)
+            return {"success": True, "status_code": 200}
 
         with tempfile.TemporaryDirectory() as tmp:
             result = retry.auto_retry(
@@ -76,12 +81,15 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
                 state_file=Path(tmp) / "state.json",
                 sleep=lambda _: None,
                 gateway_runner=gateway,
+                tv_sender=tv_sender,
             )
 
         self.assertTrue(result["success"])
         self.assertEqual(result["status"], "recovered")
         self.assertEqual(result["attempts"], 1)
-        self.assertEqual([call[0] for call in calls], ["retry_instance", "get_instance"])
+        self.assertEqual([call[0] for call in calls], ["get_instance", "retry_instance", "get_instance"])
+        self.assertEqual(len(tv_messages), 1)
+        self.assertIn("目前自动失败重试中，执行次数：1", tv_messages[0])
 
     def test_auto_retry_sends_tv_after_three_failed_attempts(self):
         tv_messages = []
@@ -118,9 +126,13 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(result["status"], "failed_after_max_attempts")
         self.assertEqual(result["attempts"], 3)
         self.assertEqual(sleeps, [180, 180, 180])
-        self.assertEqual(len(tv_messages), 1)
-        self.assertIn("重跑次数: 3", tv_messages[0])
-        self.assertIn("INE-DWD", tv_messages[0])
+        self.assertEqual(len(tv_messages), 4)
+        self.assertIn("目前自动失败重试中，执行次数：1", tv_messages[0])
+        self.assertIn("目前自动失败重试中，执行次数：2", tv_messages[1])
+        self.assertIn("目前自动失败重试中，执行次数：3", tv_messages[2])
+        self.assertIn("目前自动失败重试中，执行次数：3", tv_messages[3])
+        self.assertIn("当前重试次数已达上限", tv_messages[3])
+        self.assertIn("INE-DWD", tv_messages[3])
 
     def test_payload_b64_cli_shape_is_json_decodable(self):
         raw = {"project_code": "100", "instance_id": "200"}
@@ -186,6 +198,7 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(config["url"], "https://tv-service-alert.kuainiu.chat/alert")
         self.assertEqual(config["bot_id"], "14470d0e-73e2-4411-9306-4cea9a371264")
         self.assertEqual(config["app_id"], "")
+        self.assertEqual(config["mentions"], "simontang@kn.group,jiangchuanchen@kn.group")
 
     def test_generic_retry_country_tv_env_override_wins(self):
         with mock.patch.dict(
@@ -196,6 +209,7 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
                 "DS_FAILED_TV_URL_PH": "https://ph.example/alert",
                 "DS_FAILED_TV_BOT_ID_PH": "ph-bot",
                 "DS_FAILED_TV_APP_ID_PH": "ph-app",
+                "DS_FAILED_TV_MENTIONS_PH": "owner@kn.group",
             },
             clear=True,
         ):
@@ -204,6 +218,7 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(config["url"], "https://ph.example/alert")
         self.assertEqual(config["bot_id"], "ph-bot")
         self.assertEqual(config["app_id"], "ph-app")
+        self.assertEqual(config["mentions"], "owner@kn.group")
 
     def test_generic_retry_failure_message_keeps_ds_instance_context(self):
         alert = generic_retry.normalize_alert_payload(
@@ -223,15 +238,41 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
             country="ph",
         )
 
-        message = generic_retry.build_failure_message(alert, 3, "FAILURE", {})
+        message = generic_retry.build_failure_message(
+            alert,
+            3,
+            "FAILURE",
+            {"stdout": {"success": True, "data": {"state": "FAILURE", "errorMessage": "SQL执行失败"}}},
+            "simontang@kn.group,jiangchuanchen@kn.group",
+        )
 
-        self.assertIn("菲律宾 DolphinScheduler 失败任务自动重跑未恢复", message)
-        self.assertIn("重跑次数: 3", message)
-        self.assertIn("项目名称: 菲律宾数仓-正式环境", message)
-        self.assertIn("实例ID: 2004745", message)
-        self.assertIn("工作流定义编码: 15845044707680", message)
-        self.assertIn("工作流: 菲律宾-数仓工作流（1D）-20260715122501017", message)
-        self.assertIn("执行机器: 10.20.10.12:5678", message)
+        self.assertIn('"projectName":"菲律宾数仓-正式环境"', message)
+        self.assertIn('"workflowInstanceId":2004745', message)
+        self.assertIn('"workflowDefinitionCode":15845044707680', message)
+        self.assertIn('"workflowInstanceName":"菲律宾-数仓工作流（1D）-20260715122501017"', message)
+        self.assertIn('"workflowHost":"10.20.10.12:5678"', message)
+        self.assertIn("定时任务执行失败，失败原因：SQL执行失败", message)
+        self.assertIn("目前自动失败重试中，执行次数：3", message)
+        self.assertIn("当前重试次数已达上限，需要负责人查看处理@simontang@kn.group @jiangchuanchen@kn.group", message)
+
+    def test_generic_retry_progress_message_keeps_raw_array_shape(self):
+        alert = generic_retry.normalize_alert_payload(
+            [
+                {
+                    "projectCode": 15843450427744,
+                    "projectName": "菲律宾数仓-正式环境",
+                    "workflowInstanceId": 2058935,
+                    "workflowInstanceName": "菲律宾-数仓工作流（1D）-20260720122501017",
+                }
+            ],
+            country="ph",
+        )
+
+        message = generic_retry.build_retry_progress_message(alert, 1, "任务节点失败")
+
+        self.assertTrue(message.startswith('[{"projectCode":15843450427744'))
+        self.assertIn("定时任务执行失败，失败原因：任务节点失败", message)
+        self.assertIn("目前自动失败重试中，执行次数：1", message)
 
 
 if __name__ == "__main__":

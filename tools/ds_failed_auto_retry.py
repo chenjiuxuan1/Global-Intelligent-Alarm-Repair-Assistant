@@ -35,6 +35,7 @@ COUNTRY_TV_DEFAULTS = {
         "url": "https://tv-service-alert.kuainiu.chat/alert",
         "bot_id": "14470d0e-73e2-4411-9306-4cea9a371264",
         "app_id": "",
+        "mentions": "simontang@kn.group,jiangchuanchen@kn.group",
     },
 }
 COUNTRY_NAMES = {
@@ -114,6 +115,7 @@ def get_country_tv_config(country: str) -> dict[str, str]:
     default_url = defaults["url"] if "url" in defaults else DEFAULT_TV_URL
     default_bot_id = defaults["bot_id"] if "bot_id" in defaults else DEFAULT_TV_BOT_ID
     default_app_id = defaults["app_id"] if "app_id" in defaults else DEFAULT_TV_APP_ID
+    default_mentions = defaults["mentions"] if "mentions" in defaults else ""
     return {
         "url": os.getenv(f"DS_FAILED_TV_URL_{suffix}")
         or os.getenv("DS_FAILED_TV_URL")
@@ -124,6 +126,9 @@ def get_country_tv_config(country: str) -> dict[str, str]:
         "app_id": os.getenv(f"DS_FAILED_TV_APP_ID_{suffix}")
         or os.getenv("DS_FAILED_TV_APP_ID")
         or default_app_id,
+        "mentions": os.getenv(f"DS_FAILED_TV_MENTIONS_{suffix}")
+        or os.getenv("DS_FAILED_TV_MENTIONS")
+        or default_mentions,
     }
 
 
@@ -332,6 +337,30 @@ def extract_instance_state(response: dict[str, Any]) -> str:
     return "UNKNOWN"
 
 
+def extract_failure_reason(response: dict[str, Any]) -> str:
+    data = response.get("stdout", response)
+    reason_keys = {
+        "failurereason",
+        "failure_reason",
+        "reason",
+        "errormessage",
+        "error_message",
+        "message",
+        "msg",
+        "log",
+    }
+    for key, item in _walk_values(data):
+        if str(key).lower() not in reason_keys or item in (None, ""):
+            continue
+        text = str(item).strip()
+        if text and text.lower() not in {"success", "ok", "none", "null"}:
+            return text[:1000]
+    stderr = str(response.get("stderr") or "").strip()
+    if stderr:
+        return stderr[:1000]
+    return "未从 DS 实例详情中解析到明确失败原因，请查看 DS 实例日志"
+
+
 def send_tv_alert(message: str, url: str, bot_id: str, app_id: str = "") -> dict[str, Any]:
     payload = {
         "botId": bot_id,
@@ -359,7 +388,62 @@ def send_tv_alert(message: str, url: str, bot_id: str, app_id: str = "") -> dict
         return {"success": False, "status_code": None, "response": str(exc)}
 
 
-def build_failure_message(alert: dict[str, Any], attempts: int, state: str, last_result: dict[str, Any]) -> str:
+def _alert_payload_text(alert: dict[str, Any], unwrap_single: bool = True) -> str:
+    raw = alert.get("raw")
+    if unwrap_single and isinstance(raw, list) and len(raw) == 1:
+        raw = raw[0]
+    if raw in (None, ""):
+        raw = {
+            "projectCode": alert.get("project_code") or "",
+            "projectName": alert.get("project_name") or "",
+            "workflowInstanceId": alert.get("instance_id") or "",
+            "workflowDefinitionCode": alert.get("workflow_definition_code") or "",
+            "workflowInstanceName": alert.get("workflow_name") or "",
+            "workflowExecutionStatus": alert.get("workflow_execution_status") or "",
+            "runTimes": alert.get("run_times") or "",
+            "workflowStartTime": alert.get("workflow_start_time") or "",
+            "workflowEndTime": alert.get("workflow_end_time") or "",
+            "workflowHost": alert.get("workflow_host") or "",
+        }
+    return json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+
+
+def _mentions_text(mentions: str) -> str:
+    return " ".join(f"@{item.strip().lstrip('@')}" for item in str(mentions or "").split(",") if item.strip())
+
+
+def build_retry_progress_message(alert: dict[str, Any], attempts: int, reason: str) -> str:
+    return "\n".join(
+        [
+            _alert_payload_text(alert, unwrap_single=False),
+            f"定时任务执行失败，失败原因：{reason or '未从 DS 实例详情中解析到明确失败原因，请查看 DS 实例日志'}",
+            f"目前自动失败重试中，执行次数：{attempts}",
+        ]
+    )
+
+
+def build_failure_message(
+    alert: dict[str, Any],
+    attempts: int,
+    state: str,
+    last_result: dict[str, Any],
+    mentions: str = "",
+) -> str:
+    reason = extract_failure_reason(last_result)
+    tail = f"目前自动失败重试中，执行次数：{attempts}，当前重试次数已达上限，需要负责人查看处理"
+    mention_text = _mentions_text(mentions)
+    if mention_text:
+        tail = f"{tail}{mention_text}"
+    return "\n".join(
+        [
+            _alert_payload_text(alert),
+            f"定时任务执行失败，失败原因：{reason}",
+            tail,
+        ]
+    )
+
+
+def build_failure_debug_message(alert: dict[str, Any], attempts: int, state: str, last_result: dict[str, Any]) -> str:
     country = normalize_country(alert.get("country") or DEFAULT_COUNTRY)
     country_name = COUNTRY_NAMES.get(country, country)
     lines = [
@@ -432,7 +516,8 @@ def auto_retry(
     retry_key = alert["retry_key"]
     initial_attempts = current_attempts(state_file, retry_key)
     if initial_attempts >= max_attempts:
-        message = build_failure_message(alert, initial_attempts, "MAX_ATTEMPTS_REACHED", {})
+        tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
+        message = build_failure_message(alert, initial_attempts, "MAX_ATTEMPTS_REACHED", {}, tv_config["mentions"])
         tv_result = tv_sender(message)
         return {
             "success": False,
@@ -442,6 +527,7 @@ def auto_retry(
         }
 
     last_result: dict[str, Any] = {}
+    progress_tv_result: dict[str, Any] = {}
     state = "UNKNOWN"
     attempts = initial_attempts
 
@@ -454,6 +540,9 @@ def auto_retry(
             "instance_id": alert["instance_id"],
             "process_instance_id": alert["instance_id"],
         }
+        pre_check_result = gateway_runner("get_instance", ds_token, payload, f"{request_id}-before")
+        progress_reason = extract_failure_reason(pre_check_result)
+        progress_tv_result = tv_sender(build_retry_progress_message(alert, attempts, progress_reason))
         last_result = gateway_runner("retry_instance", ds_token, payload, request_id)
         if not last_result.get("ok"):
             state = "RETRY_ACTION_FAILED"
@@ -470,13 +559,15 @@ def auto_retry(
         if state not in TERMINAL_FAILURE_STATES and state not in {"UNKNOWN", "RETRY_ACTION_FAILED"}:
             return {"success": True, "status": "still_running", "attempts": attempts, "state": state}
 
-    message = build_failure_message(alert, attempts, state, last_result)
+    tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
+    message = build_failure_message(alert, attempts, state, last_result, tv_config["mentions"])
     tv_result = tv_sender(message)
     return {
         "success": False,
         "status": "failed_after_max_attempts",
         "attempts": attempts,
         "state": state,
+        "progress_tv_result": progress_tv_result,
         "tv_result": tv_result,
     }
 
