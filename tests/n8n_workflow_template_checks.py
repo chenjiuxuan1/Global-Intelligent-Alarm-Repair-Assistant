@@ -196,6 +196,17 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                     "整理响应",
                 )
 
+    def test_ds_failed_auto_rerun_can_infer_country_from_ds_alert_payload(self):
+        workflow = json.loads(DS_FAILED_AUTO_RERUN.read_text(encoding="utf-8"))
+        code_node = next(node for node in workflow["nodes"] if node["name"] == "识别国家并构造命令")
+        js_code = code_node["parameters"]["jsCode"]
+
+        self.assertIn("function inferCountryFromPayload", js_code)
+        self.assertIn("projectname", js_code.lower())
+        self.assertIn("workflowinstancename", js_code.lower())
+        self.assertIn("菲律宾", js_code)
+        self.assertIn("inferCountryFromPayload(raw)", js_code)
+
 
 if __name__ == "__main__":
     unittest.main()
