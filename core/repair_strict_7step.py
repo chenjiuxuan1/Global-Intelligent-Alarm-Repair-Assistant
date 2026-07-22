@@ -2145,7 +2145,7 @@ def step3_start_repair(tasks):
     return results, running_instances
 
 
-def step4_wait_and_check(running_instances, poll_interval=10, max_wait=60):
+def step4_wait_and_check(running_instances, poll_interval=30, max_wait=1800):
     """步骤4: 动态监控任务状态（每30秒检查一次）- 修复版（增加失败次数限制）"""
     if not running_instances:
         log("\n  没有需要等待的任务")
@@ -2490,7 +2490,7 @@ def step5_execute_fuyan(completed_tasks, failed_tasks, alerts):
     return fuyan_results
 
 
-def wait_for_fuyan_results(fuyan_results, poll_interval=10, max_wait=60):
+def wait_for_fuyan_results(fuyan_results, poll_interval=30, max_wait=1800):
     """等待已启动的复验工作流完成，补充最终状态"""
     running_results = [
         dict(item)
