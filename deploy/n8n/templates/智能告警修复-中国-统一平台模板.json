@@ -10,10 +10,10 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        1088,
-        32
+        6864,
+        192
       ],
-      "id": "138c8e9e-53e2-4947-89c2-d5a10488ece1",
+      "id": "8b136c17-bbd7-4ffc-9162-ed0e1dd54c25",
       "name": "Webhook",
       "webhookId": "48ac7a29-a2b6-4467-a1d1-f739564eb8af"
     },
@@ -22,24 +22,24 @@
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
       "position": [
-        1088,
-        160
+        6864,
+        320
       ],
-      "id": "9b128066-b4fe-4ad0-a376-cd4ee416fc96",
+      "id": "f298546d-e927-4986-af34-1fc66f30dfa1",
       "name": "When clicking ‘Execute workflow’"
     },
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "ssh -p 36000 root@10.20.47.14 'echo '\"'\"'========== 中国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; echo '\"'\"'中国环境使用压缩包方式同步代码，避免 git fetch/clone 网络中断'\"'\"'; if true; then echo '\"'\"'开始通过压缩包同步代码'\"'\"'; curl -L --retry 3 --retry-delay 2 --connect-timeout 10 -o '\"'\"'/tmp/global-intelligent-alarm-repair-assistant-master.tar.gz'\"'\"' '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant/archive/refs/heads/master.tar.gz'\"'\"' || { code=$?; echo \"压缩包下载失败，退出码: $code\"; exit $code; }; mkdir -p '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"创建平台目录失败，退出码: $code\"; exit $code; }; tar -xzf '\"'\"'/tmp/global-intelligent-alarm-repair-assistant-master.tar.gz'\"'\"' -C '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' --strip-components=1 || { code=$?; echo \"压缩包解压失败，退出码: $code\"; exit $code; }; echo '\"'\"'代码压缩包同步完成'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'当前版本: archive/master'\"'\"'; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'cn'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_BASE_URL='\"'\"'http://10.20.47.14:12345/dolphinscheduler'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'10'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'20'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export DS_PRIORITY_WORKFLOW_MAX_SECONDS='\"'\"'5'\"'\"'; export DB_HOST='\"'\"'rm-uf60amp9vz996n520.mysql.rds.aliyuncs.com'\"'\"'; export DB_PORT='\"'\"'3306'\"'\"'; export DB_USER='\"'\"'e_ds'\"'\"'; export DB_NAME='\"'\"'wattrel'\"'\"'; export TV_MENTIONS='\"'\"'owenzhang@kn.group,rockyzong@kn.group'\"'\"'; export PRIORITY_WORKFLOW_CODES_JSON='\"'\"'[[\"158514956979200\",\"DWD\"],[\"158514957494272\",\"ODS_RISKDATA_[full]\"],[\"158514961869824\",\"ODS_BIZ_REPAY\"],[\"158514958305280\",\"ODS_REPAY\"]]'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'cn'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"';  echo '\"'\"'开始执行: 环境检测'\"'\"'; python3 tools/task_execution_checker.py --task repair; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'"
+        "command": "ssh -p 36000 root@10.20.47.14 'echo '\"'\"'========== 中国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; echo '\"'\"'中国环境使用压缩包方式同步代码，避免 git fetch/clone 网络中断'\"'\"'; if true; then echo '\"'\"'开始通过压缩包拉取最新代码'\"'\"'; curl -L --retry 3 --retry-delay 2 --connect-timeout 10 -o '\"'\"'/tmp/global-intelligent-alarm-repair-assistant-master.tar.gz'\"'\"' '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant/archive/refs/heads/master.tar.gz'\"'\"' || { code=$?; echo \"压缩包下载失败，退出码: $code\"; exit $code; }; mkdir -p '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"创建平台目录失败，退出码: $code\"; exit $code; }; tar -xzf '\"'\"'/tmp/global-intelligent-alarm-repair-assistant-master.tar.gz'\"'\"' -C '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' --strip-components=1 || { code=$?; echo \"压缩包解压失败，退出码: $code\"; exit $code; }; echo '\"'\"'代码压缩包同步完成'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'当前版本: archive/master'\"'\"'; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'cn'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_BASE_URL='\"'\"'http://10.20.47.14:12345/dolphinscheduler'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'10'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'20'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export DS_PRIORITY_WORKFLOW_MAX_SECONDS='\"'\"'5'\"'\"'; export DB_HOST='\"'\"'rm-uf60amp9vz996n520.mysql.rds.aliyuncs.com'\"'\"'; export DB_PORT='\"'\"'3306'\"'\"'; export DB_USER='\"'\"'e_ds'\"'\"'; export DB_NAME='\"'\"'wattrel'\"'\"'; export TV_MENTIONS='\"'\"'owenzhang@kn.group,rockyzong@kn.group'\"'\"'; export PRIORITY_WORKFLOW_CODES_JSON='\"'\"'[[\"158514956979200\",\"DWD\"],[\"158514957494272\",\"ODS_RISKDATA_[full]\"],[\"158514961869824\",\"ODS_BIZ_REPAY\"],[\"158514958305280\",\"ODS_REPAY\"]]'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'cn'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"'; export REPAIR_PROCESS_MAX_SECONDS='\"'\"'900'\"'\"';  echo '\"'\"'开始执行: 环境检测'\"'\"'; python3 tools/task_execution_checker.py --task repair; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        1536,
-        32
+        7312,
+        192
       ],
-      "id": "3ff3b793-d66e-49e5-9ad8-fa0a0593e741",
+      "id": "890cc174-0106-4a33-9668-ab2ba1016f62",
       "name": "环境检测",
       "credentials": {
         "sshPrivateKey": {
@@ -51,15 +51,15 @@
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "ssh -p 36000 root@10.20.47.14 'echo '\"'\"'========== 中国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; echo '\"'\"'中国环境使用压缩包方式同步代码，避免 git fetch/clone 网络中断'\"'\"'; if true; then echo '\"'\"'开始通过压缩包同步代码'\"'\"'; curl -L --retry 3 --retry-delay 2 --connect-timeout 10 -o '\"'\"'/tmp/global-intelligent-alarm-repair-assistant-master.tar.gz'\"'\"' '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant/archive/refs/heads/master.tar.gz'\"'\"' || { code=$?; echo \"压缩包下载失败，退出码: $code\"; exit $code; }; mkdir -p '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"创建平台目录失败，退出码: $code\"; exit $code; }; tar -xzf '\"'\"'/tmp/global-intelligent-alarm-repair-assistant-master.tar.gz'\"'\"' -C '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' --strip-components=1 || { code=$?; echo \"压缩包解压失败，退出码: $code\"; exit $code; }; echo '\"'\"'代码压缩包同步完成'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'当前版本: archive/master'\"'\"'; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'cn'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_BASE_URL='\"'\"'http://10.20.47.14:12345/dolphinscheduler'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'10'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'20'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export DS_PRIORITY_WORKFLOW_MAX_SECONDS='\"'\"'5'\"'\"'; export DB_HOST='\"'\"'rm-uf60amp9vz996n520.mysql.rds.aliyuncs.com'\"'\"'; export DB_PORT='\"'\"'3306'\"'\"'; export DB_USER='\"'\"'e_ds'\"'\"'; export DB_NAME='\"'\"'wattrel'\"'\"'; export TV_MENTIONS='\"'\"'owenzhang@kn.group,rockyzong@kn.group'\"'\"'; export PRIORITY_WORKFLOW_CODES_JSON='\"'\"'[[\"158514956979200\",\"DWD\"],[\"158514957494272\",\"ODS_RISKDATA_[full]\"],[\"158514961869824\",\"ODS_BIZ_REPAY\"],[\"158514958305280\",\"ODS_REPAY\"]]'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'cn'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"';  echo '\"'\"'开始执行: 智能修复'\"'\"'; LOCK_DIR='\"'\"'/tmp/intelligent_alarm_repair_cn.lockdir'\"'\"'; echo \"并发锁目录: $LOCK_DIR\"; if ! mkdir \"$LOCK_DIR\" 2>/dev/null; then echo '\"'\"'已有智能修复任务运行中，跳过本次执行'\"'\"'; exit 0; fi; trap \"rmdir \\\"$LOCK_DIR\\\"\" EXIT; python3 core/repair_strict_7step.py; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'"
+        "command": "ssh -p 36000 root@10.20.47.14 'echo '\"'\"'========== 中国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; echo '\"'\"'中国环境使用压缩包方式同步代码，避免 git fetch/clone 网络中断'\"'\"'; if true; then echo '\"'\"'开始通过压缩包拉取最新代码'\"'\"'; curl -L --retry 3 --retry-delay 2 --connect-timeout 10 -o '\"'\"'/tmp/global-intelligent-alarm-repair-assistant-master.tar.gz'\"'\"' '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant/archive/refs/heads/master.tar.gz'\"'\"' || { code=$?; echo \"压缩包下载失败，退出码: $code\"; exit $code; }; mkdir -p '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"创建平台目录失败，退出码: $code\"; exit $code; }; tar -xzf '\"'\"'/tmp/global-intelligent-alarm-repair-assistant-master.tar.gz'\"'\"' -C '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' --strip-components=1 || { code=$?; echo \"压缩包解压失败，退出码: $code\"; exit $code; }; echo '\"'\"'代码压缩包同步完成'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'当前版本: archive/master'\"'\"'; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'cn'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_BASE_URL='\"'\"'http://10.20.47.14:12345/dolphinscheduler'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'10'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'20'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export DS_PRIORITY_WORKFLOW_MAX_SECONDS='\"'\"'5'\"'\"'; export DB_HOST='\"'\"'rm-uf60amp9vz996n520.mysql.rds.aliyuncs.com'\"'\"'; export DB_PORT='\"'\"'3306'\"'\"'; export DB_USER='\"'\"'e_ds'\"'\"'; export DB_NAME='\"'\"'wattrel'\"'\"'; export TV_MENTIONS='\"'\"'owenzhang@kn.group,rockyzong@kn.group'\"'\"'; export PRIORITY_WORKFLOW_CODES_JSON='\"'\"'[[\"158514956979200\",\"DWD\"],[\"158514957494272\",\"ODS_RISKDATA_[full]\"],[\"158514961869824\",\"ODS_BIZ_REPAY\"],[\"158514958305280\",\"ODS_REPAY\"]]'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'cn'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"'; export REPAIR_PROCESS_MAX_SECONDS='\"'\"'900'\"'\"';  echo '\"'\"'开始执行: 智能修复'\"'\"'; LOCK_FILE='\"'\"'/tmp/intelligent_alarm_repair_cn.lock'\"'\"'; echo \"并发锁文件: $LOCK_FILE\"; exec 9>\"$LOCK_FILE\"; if ! flock -n 9; then echo '\"'\"'已有智能修复任务运行中，跳过本次执行'\"'\"'; exit 0; fi; echo \"修复进程最长运行: ${REPAIR_PROCESS_MAX_SECONDS}秒\"; timeout --signal=TERM --kill-after=30s \"${REPAIR_PROCESS_MAX_SECONDS}s\" python3 core/repair_strict_7step.py; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        1712,
-        32
+        7488,
+        192
       ],
-      "id": "c826ca0d-9c38-4522-940f-2fbf95b5c7aa",
+      "id": "c3864ee2-6b21-4123-8e6f-8e2840f8e386",
       "name": "智能修复",
       "credentials": {
         "sshPrivateKey": {
@@ -76,10 +76,10 @@
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        1328,
-        128
+        7104,
+        288
       ],
-      "id": "11307c97-01f6-40fe-b276-2e5b42f24dc7",
+      "id": "bde87c04-06f8-4d51-8fc3-33b27cb060b5",
       "name": "拉取最新代码",
       "credentials": {
         "sshPrivateKey": {
@@ -96,10 +96,10 @@
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        1376,
-        304
+        7152,
+        464
       ],
-      "id": "413474f9-f5a3-4f19-8ffc-0391276d6897",
+      "id": "533a78b5-d2e4-455b-8a16-3eab23be2c9f",
       "name": "PL告警代码拉取",
       "credentials": {
         "sshPrivateKey": {
@@ -116,10 +116,10 @@
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        1552,
-        304
+        7328,
+        464
       ],
-      "id": "f7668efa-c8bd-455b-97ff-93b7141269fd",
+      "id": "cb84bc69-2bde-4b15-a46b-775c9d7ffe0c",
       "name": "PL告警触发",
       "credentials": {
         "sshPrivateKey": {
@@ -136,10 +136,10 @@
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        1344,
-        528
+        7120,
+        688
       ],
-      "id": "933771d7-2d3c-4bf3-bd16-a2cb141c3465",
+      "id": "5f2ad4f7-0491-4e45-8792-f9ae1b2a0615",
       "name": "PL告警触发1",
       "credentials": {
         "sshPrivateKey": {
@@ -157,10 +157,10 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        1072,
-        528
+        6848,
+        688
       ],
-      "id": "b26a3ed9-7d8f-482d-bcfc-107dce63d32d",
+      "id": "31dd2a98-3973-487d-b788-dedb1c901903",
       "name": "Webhook1",
       "webhookId": "48ac7a29-a2b6-4467-a1d1-f739564eb8af"
     },
@@ -173,10 +173,10 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        1072,
-        704
+        6848,
+        864
       ],
-      "id": "5fc691c7-ea26-4da7-9662-ac076969b3d4",
+      "id": "eebe3804-efe5-4336-abcf-054434bc04cc",
       "name": "Webhook2",
       "webhookId": "48ac7a29-a2b6-4467-a1d1-f739564eb8af"
     },
@@ -188,10 +188,10 @@
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        1344,
-        704
+        7120,
+        864
       ],
-      "id": "84e82045-8364-4cf6-ae3b-1e74d4f1b062",
+      "id": "0f137748-75f2-446e-825a-345ad3a9c5a6",
       "name": "PL告警触发2",
       "credentials": {
         "sshPrivateKey": {
@@ -291,7 +291,7 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "a37ed406-f1f0-48ba-810c-a9addf310654",
+  "versionId": "bf861f43-96d2-4d6a-87b9-78441b2a26d4",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "9b8dca2625dfded9c94218816984fe8bf5bd91d03aaffc5e971fd46b2e9dc2e8",

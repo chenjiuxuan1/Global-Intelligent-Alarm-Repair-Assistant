@@ -157,6 +157,7 @@ def runtime_env_for_country(country):
     runtime_env.setdefault("WORKFLOW_CODE_ROOT", "/data/git/starrocks/workflow")
     runtime_env.setdefault("WORKFLOW_CODE_COUNTRY", country)
     runtime_env.setdefault("REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS", "300")
+    runtime_env.setdefault("REPAIR_PROCESS_MAX_SECONDS", "900")
     return runtime_env
 
 
@@ -234,7 +235,7 @@ def source_env_command(country):
 
 def platform_command(country, body, action_label):
     return (
-        f"{ensure_platform_repo_command(country=country)}; "
+        f"{ensure_platform_repo_command(update=True, country=country)}; "
         f"{source_env_command(country)} "
         f"echo '开始执行: {action_label}'; "
         f"{body}; "
@@ -253,12 +254,14 @@ def check_command(country):
 
 def repair_command(country, unbuffered=False):
     python = "python3 -u" if unbuffered else "python3"
-    lock_dir = f"/tmp/intelligent_alarm_repair_{country}.lockdir"
+    lock_file = f"/tmp/intelligent_alarm_repair_{country}.lock"
     body = (
-        f"LOCK_DIR={shell_quote(lock_dir)}; "
-        "echo \"并发锁目录: $LOCK_DIR\"; "
-        "if ! mkdir \"$LOCK_DIR\" 2>/dev/null; then echo '已有智能修复任务运行中，跳过本次执行'; exit 0; fi; "
-        "trap \"rmdir \\\"$LOCK_DIR\\\"\" EXIT; "
+        f"LOCK_FILE={shell_quote(lock_file)}; "
+        "echo \"并发锁文件: $LOCK_FILE\"; "
+        "exec 9>\"$LOCK_FILE\"; "
+        "if ! flock -n 9; then echo '已有智能修复任务运行中，跳过本次执行'; exit 0; fi; "
+        "echo \"修复进程最长运行: ${REPAIR_PROCESS_MAX_SECONDS}秒\"; "
+        f"timeout --signal=TERM --kill-after=30s \"${{REPAIR_PROCESS_MAX_SECONDS}}s\" "
         f"{python} core/repair_strict_7step.py"
     )
     return remote(country, platform_command(country, body, "智能修复"))
@@ -331,7 +334,7 @@ def build_template(country):
         else {
             "repo": PLATFORM_REPO,
             "url": PLATFORM_REPO_URL,
-            "mode": "clone_if_missing_run_nodes_update_only_pull_node",
+            "mode": "clone_if_missing_sync_master_before_each_run",
         }
     )
 
