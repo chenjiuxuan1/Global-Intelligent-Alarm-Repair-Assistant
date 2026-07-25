@@ -2235,6 +2235,7 @@ def step4_wait_and_check(running_instances, poll_interval=30, max_wait=1800):
             if success and data:
                 data = maybe_replace_with_recent_real_instance(PROJECT_CODE, item, data)
                 state = data.get('state', 'UNKNOWN')
+                item['last_observed_state'] = state
                 if data.get('id') is not None:
                     item['instance_id'] = data.get('id')
                     item['task']['instance_id'] = data.get('id')
@@ -2305,12 +2306,26 @@ def step4_wait_and_check(running_instances, poll_interval=30, max_wait=1800):
         log(f"\n⚠️  等待超时，以下任务未完成:")
         for item in pending:
             log(f"    - {item['table']}: {item['instance_id']}")
-            item['task']['final_status'] = 'timeout'
+            if item.get('last_observed_state') in {
+                'RUNNING_EXECUTION', 'READY_PAUSE', 'READY_STOP', 'WAITING_THREAD',
+                'WAITING_DEPEND', 'DELAY_EXECUTION', 'SERIAL_WAIT',
+            }:
+                item['task']['final_status'] = 'running_timeout'
+                item['task']['error'] = (
+                    f"监控等待{max_wait}秒已到期，工作流仍在运行，待后续复查"
+                )
+            else:
+                item['task']['final_status'] = 'timeout'
+                item['task'].setdefault('error', f"等待任务结果超过{max_wait}秒")
             failed_tasks.append(item['task'])
     
     log(f"\n📊 最终结果:")
     log(f"  ✅ 成功: {len(completed_tasks)} 个")
-    log(f"  ❌ 失败/超时: {len(failed_tasks)} 个")
+    running_timeout_count = sum(
+        task.get('final_status') == 'running_timeout' for task in failed_tasks
+    )
+    log(f"  ❌ 失败/查询超时: {len(failed_tasks) - running_timeout_count} 个")
+    log(f"  ⏳ 仍在运行待复查: {running_timeout_count} 个")
     
     return completed_tasks, failed_tasks
 
@@ -2626,11 +2641,17 @@ def summarize_repair_outcome(alerts, completed_tasks, failed_tasks, manual_revie
     initial_by_table = {item['table']: item for item in initial_alerts}
     completed_by_table = {item['table']: item for item in completed_tasks if item.get('table')}
     failed_by_table = {item['table']: item for item in failed_tasks if item.get('table')}
+    running_by_table = {
+        table: item
+        for table, item in failed_by_table.items()
+        if item.get('final_status') == 'running_timeout'
+    }
     manual_by_table = {item['table']: item for item in manual_review_tasks if item.get('table')}
 
     rerun_tasks = []
     resolved_tasks = []
     remaining_tasks = []
+    running_tasks = []
 
     for alert in initial_alerts:
         table = alert['table']
@@ -2646,6 +2667,13 @@ def summarize_repair_outcome(alerts, completed_tasks, failed_tasks, manual_revie
             if failed_task_started:
                 rerun_task.update(failed_task)
             rerun_tasks.append(rerun_task)
+
+        if table in running_by_table:
+            running_task = dict(alert)
+            running_task.update(running_by_table[table])
+            running_task['result'] = 'running'
+            running_tasks.append(running_task)
+            continue
 
         if table in failed_by_table:
             remaining_task = dict(alert)
@@ -2693,12 +2721,14 @@ def summarize_repair_outcome(alerts, completed_tasks, failed_tasks, manual_revie
     return {
         'initial_alert_count': len(initial_alerts),
         'resolved_count': len(resolved_tasks),
-        'remaining_count': len(remaining_tasks),
+        'remaining_count': len(remaining_tasks) + len(running_tasks),
         'manual_review_count': len(remaining_tasks),
+        'running_count': len(running_tasks),
         'display_pending_tables_count': len(set(remaining_tables) | set(manual_by_table)),
         'rerun_tasks': rerun_tasks,
         'resolved_tasks': resolved_tasks,
         'remaining_tasks': remaining_tasks,
+        'running_tasks': running_tasks,
         'post_fuyan_remaining_tables': set(remaining_tables),
     }
 
@@ -2767,6 +2797,7 @@ def generate_tv_report(summary, fuyan_results):
     report_lines.append(f"  • 复验后已消失: {summary['resolved_count']} 个")
     report_lines.append(f"  • 复验后仍存在: {summary['remaining_count']} 个")
     report_lines.append(f"  • 需人工处理: {summary['manual_review_count']} 个")
+    report_lines.append(f"  • 仍在运行待复查: {summary.get('running_count', 0)} 个")
     report_lines.append(f"  • 复验启动: {len(fuyan_results)} 个")
     report_lines.append("")
     
@@ -2804,6 +2835,17 @@ def generate_tv_report(summary, fuyan_results):
             report_lines.append(f"    原因: {task.get('error', '当前告警仍未处理，需人工处理')}")
             if task.get('diff') not in (None, ''):
                 report_lines.append(f"    数据量差异: {task['diff']}")
+        report_lines.append("")
+
+    if summary.get('running_tasks'):
+        report_lines.append("⏳ 【重跑工作流仍在运行，待后续复查】")
+        for task in summary['running_tasks']:
+            report_lines.append(f"  • {task['table']}")
+            if task.get('instance_id'):
+                report_lines.append(f"    实例ID: {task['instance_id']}")
+            report_lines.append(
+                f"    状态: {task.get('error', '工作流仍在运行，待后续复查')}"
+            )
         report_lines.append("")
     
     report_lines.append("🔄 【复验工作流状态】")

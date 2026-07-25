@@ -2104,6 +2104,43 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(len(failed), 1)
         self.assertEqual(failed[0]["final_status"], "timeout")
 
+    def test_step4_keeps_running_instance_pending_when_monitoring_times_out(self):
+        module = load_module()
+        task = {
+            "table": "ods_app_strawberry_sms_log",
+            "instance_id": 1534864,
+            "workflow_code": "wf-strawberry",
+            "launched_at": "2026-07-25 13:15:51",
+        }
+        running_instances = [{
+            "table": task["table"],
+            "instance_id": task["instance_id"],
+            "workflow_code": task["workflow_code"],
+            "task": task,
+        }]
+        fake_times = iter([0, 0, 0, 0, 61])
+
+        with mock.patch.object(module, "find_recent_instance_by_workflow", return_value={}), \
+            mock.patch.object(
+                module,
+                "get_instance_detail",
+                return_value=(True, {"id": 1534864, "state": "RUNNING_EXECUTION"}, ""),
+            ), \
+            mock.patch.object(module, "maybe_replace_with_recent_real_instance", side_effect=lambda _p, _i, data: data), \
+            mock.patch.object(module, "log"), \
+            mock.patch("time.sleep"), \
+            mock.patch("time.time", side_effect=lambda: next(fake_times)):
+            completed, failed = module.step4_wait_and_check(
+                running_instances,
+                poll_interval=30,
+                max_wait=60,
+            )
+
+        self.assertEqual(completed, [])
+        self.assertEqual(len(failed), 1)
+        self.assertEqual(failed[0]["final_status"], "running_timeout")
+        self.assertIn("仍在运行", failed[0]["error"])
+
     def test_apply_repair_strategy_allows_first_redundant_retry_when_code_has_delete(self):
         module = load_module()
         with tempfile.TemporaryDirectory() as tmp:
@@ -2534,6 +2571,34 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(summary["remaining_tasks"][0]["table"], "dwd_user_individual")
         self.assertEqual(summary["remaining_tasks"][0]["result"], "manual_review")
         self.assertEqual(summary["remaining_tasks"][0]["error"], "自动重跑失败，需人工处理")
+
+    def test_summarize_repair_outcome_does_not_send_running_timeout_to_manual_review(self):
+        module = load_module()
+        alerts = [{"table": "ods_app_strawberry_sms_log", "dt": "2026-07-24", "diff": 1168}]
+        monitored_tasks = [{
+            "table": "ods_app_strawberry_sms_log",
+            "instance_id": 1534864,
+            "final_status": "running_timeout",
+            "error": "监控等待60秒已到期，工作流仍在运行，待后续复查",
+        }]
+
+        summary = module.summarize_repair_outcome(
+            alerts=alerts,
+            completed_tasks=[],
+            failed_tasks=monitored_tasks,
+            manual_review_tasks=[],
+            remaining_tables={"ods_app_strawberry_sms_log"},
+        )
+
+        self.assertEqual(summary["remaining_count"], 1)
+        self.assertEqual(summary["manual_review_count"], 0)
+        self.assertEqual(summary["remaining_tasks"], [])
+        self.assertEqual(summary["running_count"], 1)
+        self.assertEqual(summary["running_tasks"][0]["instance_id"], 1534864)
+
+        report = module.generate_tv_report(summary, [])
+        self.assertIn("仍在运行，待后续复查", report)
+        self.assertNotIn("自动重跑失败", report)
 
     def test_execute_repairs_in_batches_includes_step3_start_failures_in_failed_tasks(self):
         module = load_module()
