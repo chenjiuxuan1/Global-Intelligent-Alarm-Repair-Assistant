@@ -695,19 +695,16 @@ def find_recent_instance_by_workflow(project_code, workflow_code, launched_at=No
 
 
 def maybe_replace_with_recent_real_instance(project_code, item, current_instance):
-    """当启动回执实例状态不可信时，优先切换到同工作流的真实实例。"""
+    """仅在直接查询到异常终态时，回退查找同工作流的真实实例。"""
     task_context = item.get('task') or item
     workflow_code = item.get('workflow_code') or task_context.get('workflow_code')
     if not workflow_code:
         return current_instance
 
     current_id = str((current_instance or {}).get('id') or item.get('instance_id') or '')
-    start_response_id = str(item.get('start_response_id') or '')
     current_state = str((current_instance or {}).get('state') or '').upper()
     should_recheck_recent = (
-        not item.get('resolved_instance_id')
-        or (start_response_id and current_id == start_response_id)
-        or current_state in {'STOP', 'FAILED', 'FAILURE', 'KILL', 'READY_STOP'}
+        current_state in {'STOP', 'FAILED', 'FAILURE', 'KILL', 'READY_STOP'}
     )
     if not should_recheck_recent:
         return current_instance
@@ -2185,26 +2182,11 @@ def step4_wait_and_check(running_instances, poll_interval=30, max_wait=1800):
             instance_id = item.get('resolved_instance_id') or item['instance_id']
             workflow_code = item.get('workflow_code') or item['task'].get('workflow_code')
 
-            # 对印尼这类 process-instances 风格集群，start-process-instance 返回值可能只是启动回执，
-            # 需要先从实例列表里按工作流 code + 启动时间找到真实实例，再进入详情/状态轮询。
+            # 先使用启动接口返回的实例 ID 查询详情。部分 process-instances 风格集群会返回
+            # 启动回执而非真实实例 ID，但只有直接查询失败时才扫描实例列表；否则每个轮询
+            # 都全量扫描工作流实例，会让已经十几秒完成的任务等待数分钟。
             discovered_instance = {}
-            if not item.get('resolved_instance_id') and workflow_code:
-                discovered_instance = find_recent_instance_by_workflow(
-                    PROJECT_CODE,
-                    workflow_code,
-                    launched_at=item['task'].get('launched_at'),
-                )
-                if discovered_instance.get('id') is not None:
-                    resolved_instance_id = discovered_instance.get('id')
-                    item['resolved_instance_id'] = resolved_instance_id
-                    item['instance_id'] = resolved_instance_id
-                    item['task']['instance_id'] = resolved_instance_id
-                    debug_log(
-                        f"发现真实实例 table={table} start_response_id={item.get('start_response_id')} "
-                        f"resolved_instance_id={resolved_instance_id}"
-                    )
-                    instance_id = resolved_instance_id
-            
+
             # 查询实例状态
             success, data, msg = get_instance_detail(PROJECT_CODE, instance_id)
             if not success or not data:
@@ -2529,22 +2511,7 @@ def wait_for_fuyan_results(fuyan_results, poll_interval=30, max_wait=1800):
             fuyan_project_code = item.get('project_code') or FUYAN_PROJECT_CODE
             discovered_instance = {}
 
-            if not item.get('resolved_instance_id') and workflow_code:
-                discovered_instance = find_recent_instance_by_workflow(
-                    fuyan_project_code,
-                    workflow_code,
-                    launched_at=launched_at,
-                )
-                if discovered_instance.get('id') is not None:
-                    resolved_instance_id = discovered_instance.get('id')
-                    item['resolved_instance_id'] = resolved_instance_id
-                    item['id'] = resolved_instance_id
-                    current_instance_id = resolved_instance_id
-                    debug_log(
-                        f"复验实例发现真实实例 name={item.get('name')} start_response_id={item.get('start_response_id')} "
-                        f"resolved_instance_id={resolved_instance_id}"
-                    )
-
+            # 先查询启动接口返回的实例 ID；只有该 ID 不可查询时才扫描实例列表。
             success, data, msg = get_instance_detail(fuyan_project_code, current_instance_id)
             if not success or not data:
                 fallback_data = get_instance_from_list(fuyan_project_code, current_instance_id)
