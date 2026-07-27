@@ -231,7 +231,8 @@ def ensure_platform_repo_command(update=False, country=None):
                 "{ code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }",
                 "GIT_TERMINAL_PROMPT=0 "
                 f"timeout {GIT_SYNC_MAX_SECONDS}s git -c http.connectTimeout=15 "
-                "-c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 fetch origin master || "
+                "-c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 "
+                "fetch origin master:refs/remotes/origin/master || "
                 "{ code=$?; echo \"fetch 失败或超时，退出码: $code\"; exit $code; }",
                 "git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }",
             ]
