@@ -19,6 +19,10 @@ PLATFORM_REPO_URL = "https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Re
 PLATFORM_REPO_ARCHIVE_URL = (
     "https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant/archive/refs/heads/master.tar.gz"
 )
+SSH_CONNECT_TIMEOUT_SECONDS = 15
+SSH_KEEPALIVE_INTERVAL_SECONDS = 30
+SSH_KEEPALIVE_COUNT_MAX = 4
+GIT_SYNC_MAX_SECONDS = 120
 
 
 COUNTRIES = {
@@ -163,7 +167,17 @@ def runtime_env_for_country(country):
 
 def remote(country, inner_command):
     cfg = COUNTRIES[country]
-    return f"{cfg['ssh']} {shell_quote(inner_command)}"
+    # n8n waits for the SSH client itself.  A timeout around Python cannot
+    # protect a run that is stuck before the remote command starts (or whose
+    # TCP connection has gone half-open), so make the SSH client fail fast.
+    ssh_options = (
+        f"-o ConnectTimeout={SSH_CONNECT_TIMEOUT_SECONDS} "
+        "-o ConnectionAttempts=1 "
+        f"-o ServerAliveInterval={SSH_KEEPALIVE_INTERVAL_SECONDS} "
+        f"-o ServerAliveCountMax={SSH_KEEPALIVE_COUNT_MAX} "
+        "-o BatchMode=yes"
+    )
+    return f"{cfg['ssh']} {ssh_options} {shell_quote(inner_command)}"
 
 
 def ensure_platform_repo_command(update=False, country=None):
@@ -202,7 +216,8 @@ def ensure_platform_repo_command(update=False, country=None):
         f"echo '平台目录: {PLATFORM_REPO}'",
         f"if [ ! -d {shell_quote(PLATFORM_REPO)} ]; then "
         f"echo '平台代码不存在，开始首次 clone'; "
-        f"git clone {shell_quote(PLATFORM_REPO_URL)} {shell_quote(PLATFORM_REPO)} || "
+        "GIT_TERMINAL_PROMPT=0 "
+        f"timeout {GIT_SYNC_MAX_SECONDS}s git clone {shell_quote(PLATFORM_REPO_URL)} {shell_quote(PLATFORM_REPO)} || "
         "{ code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; "
         "else echo '平台代码目录已存在，跳过首次 clone'; fi",
         f"cd {shell_quote(PLATFORM_REPO)} || "
@@ -214,7 +229,10 @@ def ensure_platform_repo_command(update=False, country=None):
                 "echo '开始拉取最新代码'",
                 f"git remote set-url origin {shell_quote(PLATFORM_REPO_URL)} || "
                 "{ code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }",
-                "git fetch origin master || { code=$?; echo \"fetch 失败，退出码: $code\"; exit $code; }",
+                "GIT_TERMINAL_PROMPT=0 "
+                f"timeout {GIT_SYNC_MAX_SECONDS}s git -c http.connectTimeout=15 "
+                "-c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 fetch origin master || "
+                "{ code=$?; echo \"fetch 失败或超时，退出码: $code\"; exit $code; }",
                 "git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }",
             ]
         )
@@ -253,7 +271,10 @@ def check_command(country):
 
 
 def repair_command(country, unbuffered=False):
-    python = "python3 -u" if unbuffered else "python3"
+    # SSH-node output is only useful when Python flushes each progress line.
+    # Keep the parameter for compatibility with existing callers, but make
+    # both webhook and manual paths unbuffered.
+    python = "python3 -u"
     lock_file = f"/tmp/intelligent_alarm_repair_{country}.lock"
     body = (
         f"LOCK_FILE={shell_quote(lock_file)}; "
@@ -303,6 +324,42 @@ def replace_command(country, node_name, original_command):
     return diagnostic_command(country, original_command)
 
 
+def prune_disconnected_nodes(workflow):
+    """Keep only nodes reachable from a workflow trigger.
+
+    Exported n8n files often contain ad-hoc SSH diagnostics.  They are not part
+    of the workflow execution graph and may contain unsafe one-off operations,
+    so they must not be carried into a deployable platform template.
+    """
+    nodes = workflow.get("nodes", [])
+    node_names = {node.get("name") for node in nodes}
+    connections = workflow.get("connections", {})
+    pending = [
+        node["name"]
+        for node in nodes
+        if node.get("type") in {"n8n-nodes-base.webhook", "n8n-nodes-base.manualTrigger"}
+    ]
+    reachable = set()
+
+    while pending:
+        node_name = pending.pop()
+        if node_name in reachable or node_name not in node_names:
+            continue
+        reachable.add(node_name)
+        for output_groups in connections.get(node_name, {}).get("main", []):
+            for target in output_groups:
+                target_name = target.get("node")
+                if target_name and target_name not in reachable:
+                    pending.append(target_name)
+
+    workflow["nodes"] = [node for node in nodes if node.get("name") in reachable]
+    workflow["connections"] = {
+        node_name: output
+        for node_name, output in connections.items()
+        if node_name in reachable
+    }
+
+
 def redact_command(command):
     redacted = command
     for pattern in SECRET_PATTERNS:
@@ -337,6 +394,8 @@ def build_template(country):
             "mode": "clone_if_missing_sync_master_before_each_run",
         }
     )
+
+    prune_disconnected_nodes(result)
 
     for node in result.get("nodes", []):
         parameters = node.get("parameters", {})

@@ -3,33 +3,17 @@
   "nodes": [
     {
       "parameters": {
-        "httpMethod": "POST",
-        "path": "78ec70e4-e362-4497-b9d1-f8d3f0bc2eca",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2.1,
-      "position": [
-        80,
-        272
-      ],
-      "id": "5c92e80b-c50e-4d08-9baa-be2b5207f062",
-      "name": "Webhook",
-      "webhookId": "78ec70e4-e362-4497-b9d1-f8d3f0bc2eca"
-    },
-    {
-      "parameters": {
         "authentication": "privateKey",
-        "command": "ssh -p 36000 root@192.168.20.236 'echo '\"'\"'========== 泰国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then echo '\"'\"'平台代码不存在，开始首次 clone'\"'\"'; git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; else echo '\"'\"'平台代码目录已存在，跳过首次 clone'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'开始拉取最新代码'\"'\"'; git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' || { code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }; git fetch origin master || { code=$?; echo \"fetch 失败，退出码: $code\"; exit $code; }; git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }; echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'th'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'3'\"'\"'; export DS_API_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_STEP2_PROGRESS_EVERY='\"'\"'5'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'50'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'th'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"'; export REPAIR_PROCESS_MAX_SECONDS='\"'\"'900'\"'\"';  echo '\"'\"'开始执行: 智能修复'\"'\"'; LOCK_FILE='\"'\"'/tmp/intelligent_alarm_repair_th.lock'\"'\"'; echo \"并发锁文件: $LOCK_FILE\"; exec 9>\"$LOCK_FILE\"; if ! flock -n 9; then echo '\"'\"'已有智能修复任务运行中，跳过本次执行'\"'\"'; exit 0; fi; echo \"修复进程最长运行: ${REPAIR_PROCESS_MAX_SECONDS}秒\"; timeout --signal=TERM --kill-after=30s \"${REPAIR_PROCESS_MAX_SECONDS}s\" python3 core/repair_strict_7step.py; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'"
+        "command": "ssh -p 36000 root@192.168.20.236 -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes 'echo '\"'\"'========== 泰国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then echo '\"'\"'平台代码不存在，开始首次 clone'\"'\"'; GIT_TERMINAL_PROMPT=0 timeout 120s git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; else echo '\"'\"'平台代码目录已存在，跳过首次 clone'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'开始拉取最新代码'\"'\"'; git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' || { code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }; GIT_TERMINAL_PROMPT=0 timeout 120s git -c http.connectTimeout=15 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 fetch origin master || { code=$?; echo \"fetch 失败或超时，退出码: $code\"; exit $code; }; git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }; echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'th'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'3'\"'\"'; export DS_API_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_STEP2_PROGRESS_EVERY='\"'\"'5'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'50'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'th'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"'; export REPAIR_PROCESS_MAX_SECONDS='\"'\"'900'\"'\"';  echo '\"'\"'开始执行: 环境检测'\"'\"'; python3 tools/task_execution_checker.py --task repair; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        448,
-        272
+        2848,
+        784
       ],
-      "id": "c79679ea-85de-4026-b2d8-ec5a789e239f",
-      "name": "智能修复",
+      "id": "51ed133d-7bbc-40ae-97a4-11d02101c295",
+      "name": "执行环境检测",
       "credentials": {
         "sshPrivateKey": {
           "id": "SliSXhrkW6tiEFFo",
@@ -40,37 +24,16 @@
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "ssh -p 36000 root@192.168.20.236 'echo '\"'\"'========== 泰国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then echo '\"'\"'平台代码不存在，开始首次 clone'\"'\"'; git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; else echo '\"'\"'平台代码目录已存在，跳过首次 clone'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'开始拉取最新代码'\"'\"'; git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' || { code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }; git fetch origin master || { code=$?; echo \"fetch 失败，退出码: $code\"; exit $code; }; git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }; echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"; echo '\"'\"'拉取完成'\"'\"''"
+        "command": "ssh -p 36000 root@192.168.20.236 -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes 'echo '\"'\"'========== 泰国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then echo '\"'\"'平台代码不存在，开始首次 clone'\"'\"'; GIT_TERMINAL_PROMPT=0 timeout 120s git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; else echo '\"'\"'平台代码目录已存在，跳过首次 clone'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'开始拉取最新代码'\"'\"'; git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' || { code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }; GIT_TERMINAL_PROMPT=0 timeout 120s git -c http.connectTimeout=15 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 fetch origin master || { code=$?; echo \"fetch 失败或超时，退出码: $code\"; exit $code; }; git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }; echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'th'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'3'\"'\"'; export DS_API_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_STEP2_PROGRESS_EVERY='\"'\"'5'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'50'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'th'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"'; export REPAIR_PROCESS_MAX_SECONDS='\"'\"'900'\"'\"';  echo '\"'\"'开始执行: 环境检测'\"'\"'; python3 tools/task_execution_checker.py --task repair; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        240,
-        -16
+        2992,
+        496
       ],
-      "id": "1ed6f506-fbd6-4320-a50c-6f1411646911",
-      "name": "拉取最新代码",
-      "credentials": {
-        "sshPrivateKey": {
-          "id": "SliSXhrkW6tiEFFo",
-          "name": "泰国跳板机"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "authentication": "privateKey",
-        "command": "ssh -p 36000 root@192.168.20.236 'echo '\"'\"'========== 泰国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then echo '\"'\"'平台代码不存在，开始首次 clone'\"'\"'; git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; else echo '\"'\"'平台代码目录已存在，跳过首次 clone'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'开始拉取最新代码'\"'\"'; git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' || { code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }; git fetch origin master || { code=$?; echo \"fetch 失败，退出码: $code\"; exit $code; }; git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }; echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'th'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'3'\"'\"'; export DS_API_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_STEP2_PROGRESS_EVERY='\"'\"'5'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'50'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'th'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"'; export REPAIR_PROCESS_MAX_SECONDS='\"'\"'900'\"'\"';  echo '\"'\"'开始执行: 智能修复'\"'\"'; LOCK_FILE='\"'\"'/tmp/intelligent_alarm_repair_th.lock'\"'\"'; echo \"并发锁文件: $LOCK_FILE\"; exec 9>\"$LOCK_FILE\"; if ! flock -n 9; then echo '\"'\"'已有智能修复任务运行中，跳过本次执行'\"'\"'; exit 0; fi; echo \"修复进程最长运行: ${REPAIR_PROCESS_MAX_SECONDS}秒\"; timeout --signal=TERM --kill-after=30s \"${REPAIR_PROCESS_MAX_SECONDS}s\" python3 -u core/repair_strict_7step.py; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'",
-        "cwd": "=/"
-      },
-      "type": "n8n-nodes-base.ssh",
-      "typeVersion": 1,
-      "position": [
-        608,
-        -16
-      ],
-      "id": "5ffd188c-4f11-4bbe-9a8d-2cd74fde2b67",
-      "name": "智能修复1",
+      "id": "097a566f-af41-49bd-8c75-8f0a9ccffbd1",
+      "name": "环境检测",
       "credentials": {
         "sshPrivateKey": {
           "id": "SliSXhrkW6tiEFFo",
@@ -83,25 +46,26 @@
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
       "position": [
-        32,
-        -16
+        2624,
+        496
       ],
-      "id": "b7a73fdf-3786-4f00-94bc-cef2ad934094",
+      "id": "bb985370-91c8-47f8-a8d6-88a8bd7cc207",
       "name": "手动触发"
     },
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "ssh -p 36000 root@192.168.20.236 'echo '\"'\"'========== 泰国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then echo '\"'\"'平台代码不存在，开始首次 clone'\"'\"'; git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; else echo '\"'\"'平台代码目录已存在，跳过首次 clone'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'开始拉取最新代码'\"'\"'; git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' || { code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }; git fetch origin master || { code=$?; echo \"fetch 失败，退出码: $code\"; exit $code; }; git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }; echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'th'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'3'\"'\"'; export DS_API_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_STEP2_PROGRESS_EVERY='\"'\"'5'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'50'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'th'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"'; export REPAIR_PROCESS_MAX_SECONDS='\"'\"'900'\"'\"';  echo '\"'\"'开始执行: 环境检测'\"'\"'; python3 tools/task_execution_checker.py --task repair; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'"
+        "command": "ssh -p 36000 root@192.168.20.236 -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes 'echo '\"'\"'========== 泰国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then echo '\"'\"'平台代码不存在，开始首次 clone'\"'\"'; GIT_TERMINAL_PROMPT=0 timeout 120s git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; else echo '\"'\"'平台代码目录已存在，跳过首次 clone'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'开始拉取最新代码'\"'\"'; git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' || { code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }; GIT_TERMINAL_PROMPT=0 timeout 120s git -c http.connectTimeout=15 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 fetch origin master || { code=$?; echo \"fetch 失败或超时，退出码: $code\"; exit $code; }; git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }; echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'th'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'3'\"'\"'; export DS_API_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_STEP2_PROGRESS_EVERY='\"'\"'5'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'50'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'th'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"'; export REPAIR_PROCESS_MAX_SECONDS='\"'\"'900'\"'\"';  echo '\"'\"'开始执行: 智能修复'\"'\"'; LOCK_FILE='\"'\"'/tmp/intelligent_alarm_repair_th.lock'\"'\"'; echo \"并发锁文件: $LOCK_FILE\"; exec 9>\"$LOCK_FILE\"; if ! flock -n 9; then echo '\"'\"'已有智能修复任务运行中，跳过本次执行'\"'\"'; exit 0; fi; echo \"修复进程最长运行: ${REPAIR_PROCESS_MAX_SECONDS}秒\"; timeout --signal=TERM --kill-after=30s \"${REPAIR_PROCESS_MAX_SECONDS}s\" python3 -u core/repair_strict_7step.py; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'",
+        "cwd": "=/"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        400,
-        -16
+        3200,
+        496
       ],
-      "id": "20188521-a046-4b8a-9b34-8c2eb44b0141",
-      "name": "环境检测",
+      "id": "5a057a61-2911-4e82-957b-460929c53f12",
+      "name": "智能修复1",
       "credentials": {
         "sshPrivateKey": {
           "id": "SliSXhrkW6tiEFFo",
@@ -112,16 +76,16 @@
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "ssh -p 36000 root@192.168.20.236 'echo '\"'\"'========== 泰国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then echo '\"'\"'平台代码不存在，开始首次 clone'\"'\"'; git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; else echo '\"'\"'平台代码目录已存在，跳过首次 clone'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'开始拉取最新代码'\"'\"'; git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' || { code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }; git fetch origin master || { code=$?; echo \"fetch 失败，退出码: $code\"; exit $code; }; git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }; echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'th'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'3'\"'\"'; export DS_API_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_STEP2_PROGRESS_EVERY='\"'\"'5'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'50'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'th'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"'; export REPAIR_PROCESS_MAX_SECONDS='\"'\"'900'\"'\"';  echo '\"'\"'开始执行: 环境检测'\"'\"'; python3 tools/task_execution_checker.py --task repair; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'"
+        "command": "ssh -p 36000 root@192.168.20.236 -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes 'echo '\"'\"'========== 泰国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then echo '\"'\"'平台代码不存在，开始首次 clone'\"'\"'; GIT_TERMINAL_PROMPT=0 timeout 120s git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; else echo '\"'\"'平台代码目录已存在，跳过首次 clone'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'开始拉取最新代码'\"'\"'; git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' || { code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }; GIT_TERMINAL_PROMPT=0 timeout 120s git -c http.connectTimeout=15 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 fetch origin master || { code=$?; echo \"fetch 失败或超时，退出码: $code\"; exit $code; }; git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }; echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"; echo '\"'\"'拉取完成'\"'\"''"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        256,
-        272
+        2832,
+        496
       ],
-      "id": "f0c66276-09d6-4433-8c38-22253b3bfeca",
-      "name": "执行环境检测",
+      "id": "9d6a1fc7-b4c0-4ebf-b3e7-318d18c7bf65",
+      "name": "拉取最新代码",
       "credentials": {
         "sshPrivateKey": {
           "id": "SliSXhrkW6tiEFFo",
@@ -132,48 +96,42 @@
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "ssh -p 36000 root@192.168.20.236 'find /data /opt /root -maxdepth 5 \\( -name \"application*.yml\" -o -name \"application*.yaml\" -o -name \"application*.properties\" \\) 2>/dev/null | xargs grep -nE \"spring.datasource|jdbc:mysql|dolphinscheduler|driver-class-name|username|password\" 2>/dev/null | head -200'"
+        "command": "ssh -p 36000 root@192.168.20.236 -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes 'echo '\"'\"'========== 泰国 智能告警修复平台 =========='\"'\"'; echo '\"'\"'平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; if [ ! -d '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' ]; then echo '\"'\"'平台代码不存在，开始首次 clone'\"'\"'; GIT_TERMINAL_PROMPT=0 timeout 120s git clone '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; else echo '\"'\"'平台代码目录已存在，跳过首次 clone'\"'\"'; fi; cd '\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"' || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo '\"'\"'开始拉取最新代码'\"'\"'; git remote set-url origin '\"'\"'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git'\"'\"' || { code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }; GIT_TERMINAL_PROMPT=0 timeout 120s git -c http.connectTimeout=15 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 fetch origin master || { code=$?; echo \"fetch 失败或超时，退出码: $code\"; exit $code; }; git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }; echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"; if [ -f .env.local ]; then echo '\"'\"'加载 .env.local'\"'\"'; set -a; source .env.local; set +a; else echo '\"'\"'未发现 .env.local，使用 n8n 内置变量'\"'\"'; fi; export APP_COUNTRY='\"'\"'th'\"'\"'; export APP_WORKSPACE='\"'\"'/root/Global-Intelligent-Alarm-Repair-Assistant'\"'\"'; export DS_API_GET_TIMEOUT_SECONDS='\"'\"'3'\"'\"'; export DS_API_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_STEP2_PROGRESS_EVERY='\"'\"'5'\"'\"'; export DS_API_GET_RETRY_COUNT='\"'\"'1'\"'\"'; export DS_WORKFLOW_LIST_PAGE_SIZE='\"'\"'50'\"'\"'; export DS_WORKFLOW_LIST_MAX_SECONDS='\"'\"'30'\"'\"'; export WORKFLOW_CODE_ROOT='\"'\"'/data/git/starrocks/workflow'\"'\"'; export WORKFLOW_CODE_COUNTRY='\"'\"'th'\"'\"'; export REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS='\"'\"'300'\"'\"'; export REPAIR_PROCESS_MAX_SECONDS='\"'\"'900'\"'\"';  echo '\"'\"'开始执行: 智能修复'\"'\"'; LOCK_FILE='\"'\"'/tmp/intelligent_alarm_repair_th.lock'\"'\"'; echo \"并发锁文件: $LOCK_FILE\"; exec 9>\"$LOCK_FILE\"; if ! flock -n 9; then echo '\"'\"'已有智能修复任务运行中，跳过本次执行'\"'\"'; exit 0; fi; echo \"修复进程最长运行: ${REPAIR_PROCESS_MAX_SECONDS}秒\"; timeout --signal=TERM --kill-after=30s \"${REPAIR_PROCESS_MAX_SECONDS}s\" python3 -u core/repair_strict_7step.py; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'"
       },
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        880,
-        272
+        3040,
+        784
       ],
-      "id": "06f4f9a1-8c71-41e4-89c4-3ff4189c80e4",
-      "name": "智能修复2",
+      "id": "54b715e0-7df0-4d6d-b1b5-b724480775b9",
+      "name": "智能修复",
       "credentials": {
         "sshPrivateKey": {
           "id": "SliSXhrkW6tiEFFo",
           "name": "泰国跳板机"
         }
       }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "78ec70e4-e362-4497-b9d1-f8d3f0bc2eca",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        2672,
+        784
+      ],
+      "id": "732bc3f2-3611-4028-89f6-f62d7d480ab3",
+      "name": "Webhook",
+      "webhookId": "78ec70e4-e362-4497-b9d1-f8d3f0bc2eca"
     }
   ],
   "pinData": {},
   "connections": {
-    "Webhook": {
-      "main": [
-        [
-          {
-            "node": "执行环境检测",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "拉取最新代码": {
-      "main": [
-        [
-          {
-            "node": "环境检测",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "手动触发": {
       "main": [
         [
@@ -196,11 +154,33 @@
         ]
       ]
     },
+    "拉取最新代码": {
+      "main": [
+        [
+          {
+            "node": "环境检测",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "执行环境检测": {
       "main": [
         [
           {
             "node": "智能修复",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "执行环境检测",
             "type": "main",
             "index": 0
           }
@@ -214,7 +194,7 @@
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "versionId": "d7b14e66-deee-4462-af6f-c7f1811925cd",
+  "versionId": "b9ddf428-9305-4d84-8842-793e25a89449",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "9b8dca2625dfded9c94218816984fe8bf5bd91d03aaffc5e971fd46b2e9dc2e8",

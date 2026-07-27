@@ -63,7 +63,8 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                     else:
                         self.assertIn("git clone", command)
                         self.assertIn("Global-Intelligent-Alarm-Repair-Assistant.git", command)
-                        self.assertIn("git fetch origin master", command)
+                        self.assertIn("timeout 120s git -c http.connectTimeout=15", command)
+                        self.assertIn("fetch origin master", command)
                         self.assertIn("git reset --hard origin/master", command)
                     self.assertIn("当前版本:", command)
                     self.assertIn("开始执行:", command)
@@ -100,7 +101,8 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                         self.assertIn("git clone", command)
                         self.assertIn("Global-Intelligent-Alarm-Repair-Assistant.git", command)
                         self.assertIn("git remote set-url origin", command)
-                        self.assertIn("git fetch origin master", command)
+                        self.assertIn("timeout 120s git -c http.connectTimeout=15", command)
+                        self.assertIn("fetch origin master", command)
                         self.assertIn("git reset --hard origin/master", command)
                         self.assertIn("开始拉取最新代码", command)
                     self.assertIn("拉取完成", command)
@@ -152,6 +154,9 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                     self.assertIn("'900'", command)
                     self.assertIn("REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS=", command)
                     self.assertIn("'300'", command)
+                    self.assertIn("python3 -u core/repair_strict_7step.py", command)
+                    self.assertIn("-o ConnectTimeout=15", command)
+                    self.assertIn("-o ServerAliveInterval=30", command)
 
     def test_templates_do_not_embed_known_inline_secrets(self):
         secret_patterns = [
@@ -166,6 +171,31 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
             for pattern in secret_patterns:
                 with self.subTest(path=path.name, pattern=pattern.pattern):
                     self.assertIsNone(pattern.search(text))
+
+    def test_templates_exclude_disconnected_ssh_diagnostics(self):
+        for display, _ in EXPECTED.items():
+            with self.subTest(display=display):
+                workflow = self.load_template(display)
+                node_names = {node["name"] for node in workflow["nodes"]}
+                reachable = set()
+                pending = [
+                    node["name"]
+                    for node in workflow["nodes"]
+                    if node["type"] in {
+                        "n8n-nodes-base.webhook",
+                        "n8n-nodes-base.manualTrigger",
+                    }
+                ]
+                while pending:
+                    node_name = pending.pop()
+                    if node_name in reachable:
+                        continue
+                    reachable.add(node_name)
+                    for outputs in workflow["connections"].get(node_name, {}).get("main", []):
+                        for target in outputs:
+                            if target["node"] in node_names:
+                                pending.append(target["node"])
+                self.assertEqual(node_names, reachable)
 
     def test_ds_failed_auto_rerun_routes_to_country_jump_hosts(self):
         workflow = json.loads(DS_FAILED_AUTO_RERUN.read_text(encoding="utf-8"))
