@@ -502,14 +502,26 @@ def git_task_owner(country: str, task_name: str) -> str:
     """Return the e-mail from the latest Git commit touching code named by a DS task."""
     task_name = str(task_name or "").strip()
     root = Path(os.getenv("WORKFLOW_CODE_ROOT", "/data/git/starrocks/workflow"))
-    if not task_name or not (root / ".git").exists():
+    if not task_name:
         return ""
     # Keep this aligned with the workflow-code directory configured for the
     # repair service; APP_COUNTRY is only a sensible fallback.
     scope = os.getenv("WORKFLOW_CODE_COUNTRY", normalize_country(country)).strip() or normalize_country(country)
+    country_root = root / scope
+    if (country_root / ".git").exists():
+        repo_root = country_root
+        pathspec: list[str] = []
+    elif (root / ".git").exists() and country_root.is_dir():
+        repo_root = root
+        pathspec = [scope]
+    else:
+        return ""
     try:
+        grep_cmd = ["git", "-C", str(repo_root), "grep", "-l", "-F", "--", task_name]
+        if pathspec:
+            grep_cmd.extend(["--", *pathspec])
         matched = subprocess.run(
-            ["git", "-C", str(root), "grep", "-l", "-F", "--", task_name, "--", scope],
+            grep_cmd,
             text=True, capture_output=True, timeout=10, check=False,
         )
         paths = [line.strip() for line in matched.stdout.splitlines() if line.strip()]
