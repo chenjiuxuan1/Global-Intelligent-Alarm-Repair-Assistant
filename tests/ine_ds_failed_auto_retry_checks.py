@@ -274,6 +274,50 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertIn("定时任务执行失败，失败原因：任务节点失败", message)
         self.assertIn("目前自动失败重试中，执行次数：1", message)
 
+    def test_generic_retry_reads_failed_task_log_when_instance_has_no_reason(self):
+        calls = []
+        messages = []
+
+        def gateway(action, token, payload, request_id):
+            calls.append(action)
+            if action == "get_instance":
+                return {"ok": True, "stdout": {"success": True, "data": {"state": "FAILURE"}}}
+            if action == "list_task_instances":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {"totalList": [{"id": 88, "name": "失败SQL", "state": "FAILURE"}]},
+                    },
+                }
+            if action == "get_task_log":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {"log": "INFO start\\nERROR Table test_missing_table does not exist\\n"},
+                    },
+                }
+            return {"ok": True, "stdout": {"success": True}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = generic_retry.auto_retry(
+                alert={"country": "mx", "project_code": "100", "instance_id": "200", "retry_key": "mx:100:200"},
+                ds_token="token",
+                max_attempts=1,
+                retry_delay_seconds=0,
+                state_file=Path(tmp) / "state.json",
+                sleep=lambda _: None,
+                gateway_runner=gateway,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+            )
+
+        self.assertFalse(result["success"])
+        self.assertIn("list_task_instances", calls)
+        self.assertIn("get_task_log", calls)
+        self.assertIn("ERROR Table test_missing_table does not exist", messages[0])
+        self.assertIn("ERROR Table test_missing_table does not exist", messages[-1])
+
 
 if __name__ == "__main__":
     unittest.main()

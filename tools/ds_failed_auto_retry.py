@@ -50,6 +50,8 @@ COUNTRY_NAMES = {
 
 SUCCESS_STATES = {"SUCCESS"}
 TERMINAL_FAILURE_STATES = {"FAILURE", "FAILED", "STOP", "KILL", "KILLING"}
+GENERIC_FAILURE_REASON = "未从 DS 实例详情中解析到明确失败原因，请查看 DS 实例日志"
+FAILED_TASK_STATES = {"FAILURE", "FAILED", "STOP", "KILL", "KILLING", "ERROR", "6"}
 
 
 def _load_dotenv(path: Path) -> None:
@@ -358,7 +360,99 @@ def extract_failure_reason(response: dict[str, Any]) -> str:
     stderr = str(response.get("stderr") or "").strip()
     if stderr:
         return stderr[:1000]
-    return "未从 DS 实例详情中解析到明确失败原因，请查看 DS 实例日志"
+    return GENERIC_FAILURE_REASON
+
+
+def _task_instances_from_response(response: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract task instances from the gateway's list_task_instances response."""
+    data = response.get("stdout", response)
+    if not isinstance(data, dict):
+        return []
+    payload = data.get("data")
+    if isinstance(payload, dict):
+        for key in ("totalList", "records", "list"):
+            items = payload.get(key)
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    return []
+
+
+def _is_failed_task(task: dict[str, Any]) -> bool:
+    state = str(
+        task.get("stateDesc")
+        or task.get("state")
+        or task.get("executionStatus")
+        or task.get("status")
+        or ""
+    ).strip().upper()
+    return state in FAILED_TASK_STATES
+
+
+def _summarize_task_log(value: Any) -> str:
+    """Return a compact, useful tail from a DS task log."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    error_lines = [
+        line
+        for line in lines
+        if any(marker in line.lower() for marker in ("error", "exception", "caused by", "failed", "失败"))
+    ]
+    selected = error_lines[-8:] if error_lines else lines[-12:]
+    return "\n".join(selected)[-1000:]
+
+
+def extract_task_log_failure_reason(response: dict[str, Any]) -> str:
+    """Read the actual log text returned by get_task_log, not API wrapper messages."""
+    data = response.get("stdout", response)
+    for key, value in _walk_values(data):
+        if str(key).lower() in {"log", "logcontent", "log_content", "content"}:
+            summary = _summarize_task_log(value)
+            if summary:
+                return summary
+    return ""
+
+
+def fetch_failure_reason_from_task_log(
+    alert: dict[str, Any],
+    ds_token: str,
+    request_id: str,
+    gateway_runner: Callable[[str, str, dict[str, Any], str], dict[str, Any]],
+) -> str:
+    """Find failed task instances and return the first available failed-task log tail."""
+    payload = {
+        "project_code": alert["project_code"],
+        "instance_id": alert["instance_id"],
+        "process_instance_id": alert["instance_id"],
+        "page_size": 100,
+    }
+    task_list_response = gateway_runner("list_task_instances", ds_token, payload, f"{request_id}-tasks")
+    failed_tasks = [task for task in _task_instances_from_response(task_list_response) if _is_failed_task(task)]
+    for task in failed_tasks:
+        task_instance_id = task.get("id") or task.get("taskInstanceId")
+        if not task_instance_id:
+            continue
+        log_response = gateway_runner(
+            "get_task_log",
+            ds_token,
+            {
+                **payload,
+                "task_instance_id": task_instance_id,
+                "task_name": task.get("name") or task.get("taskName") or "",
+                "task_code": task.get("taskCode") or "",
+                "limit": 2000,
+            },
+            f"{request_id}-task-{task_instance_id}-log",
+        )
+        reason = extract_task_log_failure_reason(log_response)
+        if reason:
+            return reason
+    return ""
 
 
 def send_tv_alert(message: str, url: str, bot_id: str, app_id: str = "") -> dict[str, Any]:
@@ -428,8 +522,9 @@ def build_failure_message(
     state: str,
     last_result: dict[str, Any],
     mentions: str = "",
+    failure_reason: str = "",
 ) -> str:
-    reason = extract_failure_reason(last_result)
+    reason = failure_reason or extract_failure_reason(last_result)
     tail = f"目前自动失败重试中，执行次数：{attempts}，当前重试次数已达上限，需要负责人查看处理"
     mention_text = _mentions_text(mentions)
     if mention_text:
@@ -542,6 +637,14 @@ def auto_retry(
         }
         pre_check_result = gateway_runner("get_instance", ds_token, payload, f"{request_id}-before")
         progress_reason = extract_failure_reason(pre_check_result)
+        if (
+            progress_reason == GENERIC_FAILURE_REASON
+            and extract_instance_state(pre_check_result) in TERMINAL_FAILURE_STATES
+        ):
+            progress_reason = (
+                fetch_failure_reason_from_task_log(alert, ds_token, request_id, gateway_runner)
+                or progress_reason
+            )
         progress_tv_result = tv_sender(build_retry_progress_message(alert, attempts, progress_reason))
         last_result = gateway_runner("retry_instance", ds_token, payload, request_id)
         if not last_result.get("ok"):
@@ -560,7 +663,22 @@ def auto_retry(
             return {"success": True, "status": "still_running", "attempts": attempts, "state": state}
 
     tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
-    message = build_failure_message(alert, attempts, state, last_result, tv_config["mentions"])
+    final_reason = extract_failure_reason(last_result)
+    if final_reason == GENERIC_FAILURE_REASON:
+        final_reason = fetch_failure_reason_from_task_log(
+            alert,
+            ds_token,
+            f"{normalize_country(alert.get('country') or DEFAULT_COUNTRY)}-ds-auto-retry-{alert['instance_id']}-{attempts}",
+            gateway_runner,
+        ) or final_reason
+    message = build_failure_message(
+        alert,
+        attempts,
+        state,
+        last_result,
+        tv_config["mentions"],
+        failure_reason=final_reason,
+    )
     tv_result = tv_sender(message)
     return {
         "success": False,
