@@ -281,7 +281,8 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         def gateway(action, token, payload, request_id):
             calls.append(action)
             if action == "get_instance":
-                return {"ok": True, "stdout": {"success": True, "data": {"state": "FAILURE"}}}
+                # DolphinScheduler also returns the failure state as numeric code 6.
+                return {"ok": True, "stdout": {"success": True, "data": {"state": 6}}}
             if action == "list_task_instances":
                 return {
                     "ok": True,
