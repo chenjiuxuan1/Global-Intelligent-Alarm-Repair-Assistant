@@ -363,6 +363,57 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertIn("java.sql.SQLSyntaxErrorException: Unknown table test_missing_table", messages[0])
         self.assertNotIn("at stack.frame", messages[0])
 
+    def test_generic_retry_max_summary_reuses_cached_reason_and_sends_once(self):
+        messages = []
+
+        def gateway(action, token, payload, request_id):
+            # Simulate a short-lived task-log API failure during the final summary.
+            if action == "list_task_instances":
+                return {"ok": True, "stdout": {"success": True, "data": {"data": {"totalList": []}}}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            for _ in range(3):
+                generic_retry.record_attempt(state_file, "mx:100:200")
+            generic_retry.record_failure_context(
+                state_file,
+                "mx:100:200",
+                "java.sql.SQLSyntaxErrorException: Unknown table dm_analyst.missing_table",
+                "kuiwu@kn.group",
+            )
+            result = generic_retry.auto_retry(
+                alert={"country": "mx", "project_code": "100", "instance_id": "200", "retry_key": "mx:100:200"},
+                ds_token="token",
+                max_attempts=3,
+                retry_delay_seconds=0,
+                state_file=state_file,
+                sleep=lambda _: None,
+                gateway_runner=gateway,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+            )
+            repeated = generic_retry.auto_retry(
+                alert={"country": "mx", "project_code": "100", "instance_id": "200", "retry_key": "mx:100:200"},
+                ds_token="token",
+                max_attempts=3,
+                retry_delay_seconds=0,
+                state_file=state_file,
+                sleep=lambda _: None,
+                gateway_runner=gateway,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+            )
+
+        self.assertEqual(result["status"], "max_attempts_reached")
+        self.assertEqual(repeated["status"], "max_attempts_already_notified")
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Unknown table dm_analyst.missing_table", messages[0])
+        self.assertIn("@kuiwu@kn.group", messages[0])
+
+    def test_generic_retry_country_owner_fallback(self):
+        with mock.patch.object(generic_retry, "git_task_owner", return_value=""):
+            self.assertEqual(generic_retry.resolve_mentions("mx", "任务", ""), "kuiwu@kn.group")
+            self.assertEqual(generic_retry.resolve_mentions("cn", "任务", ""), "gretchenhe@kn.group")
+
 
 if __name__ == "__main__":
     unittest.main()

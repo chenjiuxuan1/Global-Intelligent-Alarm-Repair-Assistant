@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
 import json
 import os
 import re
@@ -19,9 +20,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +54,14 @@ SUCCESS_STATES = {"SUCCESS"}
 TERMINAL_FAILURE_STATES = {"FAILURE", "FAILED", "STOP", "KILL", "KILLING", "6"}
 GENERIC_FAILURE_REASON = "未从 DS 实例详情中解析到明确失败原因，请查看 DS 实例日志"
 FAILED_TASK_STATES = {"FAILURE", "FAILED", "STOP", "KILL", "KILLING", "ERROR", "6"}
+COUNTRY_FALLBACK_MENTIONS = {
+    "cn": "gretchenhe@kn.group",
+    "ine": "gretchenhe@kn.group",
+    "mx": "kuiwu@kn.group",
+    "ph": "simontang@kn.group",
+    "pk": "adamyu@kn.group",
+    "th": "qilonghuang@kn.group",
+}
 
 
 def _load_dotenv(path: Path) -> None:
@@ -280,6 +290,65 @@ def current_attempts(state_file: Path, retry_key: str) -> int:
     return int((state.get(retry_key) or {}).get("attempts") or 0)
 
 
+def failure_context(state_file: Path, retry_key: str) -> dict[str, str]:
+    item = _read_json(state_file).get(retry_key) or {}
+    return {
+        "reason": str(item.get("last_failure_reason") or "").strip(),
+        "mentions": str(item.get("mentions") or "").strip(),
+    }
+
+
+def record_failure_context(state_file: Path, retry_key: str, reason: str, mentions: str) -> None:
+    state = _read_json(state_file)
+    item = state.get(retry_key) or {"attempts": 0}
+    state[retry_key] = {
+        **item,
+        "last_failure_reason": str(reason or "").strip(),
+        "mentions": str(mentions or "").strip(),
+    }
+    _write_json(state_file, state)
+
+
+def max_attempts_notified(state_file: Path, retry_key: str) -> bool:
+    return bool((_read_json(state_file).get(retry_key) or {}).get("max_attempts_notified"))
+
+
+def mark_max_attempts_notified(state_file: Path, retry_key: str) -> None:
+    state = _read_json(state_file)
+    item = state.get(retry_key) or {"attempts": 0}
+    state[retry_key] = {
+        **item,
+        "max_attempts_notified": True,
+        "max_attempts_notified_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    _write_json(state_file, state)
+
+
+def _lock_path(state_file: Path, retry_key: str) -> Path:
+    safe_key = re.sub(r"[^A-Za-z0-9_.-]+", "_", retry_key)
+    return state_file.parent / f".{safe_key}.lock"
+
+
+@contextmanager
+def retry_lock(state_file: Path, retry_key: str) -> Iterator[bool]:
+    """Acquire a non-blocking per-instance lock; duplicate alerts simply exit."""
+    lock_path = _lock_path(state_file, retry_key)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
 def _payload_b64(payload: dict[str, Any]) -> str:
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     return base64.b64encode(raw).decode("ascii")
@@ -429,12 +498,44 @@ def extract_task_log_failure_reason(response: dict[str, Any]) -> str:
     return ""
 
 
-def fetch_failure_reason_from_task_log(
+def git_task_owner(country: str, task_name: str) -> str:
+    """Return the e-mail from the latest Git commit touching code named by a DS task."""
+    task_name = str(task_name or "").strip()
+    root = Path(os.getenv("WORKFLOW_CODE_ROOT", "/data/git/starrocks/workflow"))
+    if not task_name or not (root / ".git").exists():
+        return ""
+    # Keep this aligned with the workflow-code directory configured for the
+    # repair service; APP_COUNTRY is only a sensible fallback.
+    scope = os.getenv("WORKFLOW_CODE_COUNTRY", normalize_country(country)).strip() or normalize_country(country)
+    try:
+        matched = subprocess.run(
+            ["git", "-C", str(root), "grep", "-l", "-F", "--", task_name, "--", scope],
+            text=True, capture_output=True, timeout=10, check=False,
+        )
+        paths = [line.strip() for line in matched.stdout.splitlines() if line.strip()]
+        if not paths:
+            return ""
+        author = subprocess.run(
+            ["git", "-C", str(root), "log", "-1", "--format=%ae", "--", paths[0]],
+            text=True, capture_output=True, timeout=10, check=False,
+        ).stdout.strip()
+        return author if "@" in author else ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def resolve_mentions(country: str, task_name: str, configured_mentions: str = "") -> str:
+    return git_task_owner(country, task_name) or COUNTRY_FALLBACK_MENTIONS.get(
+        normalize_country(country), configured_mentions,
+    )
+
+
+def fetch_failure_info_from_task_log(
     alert: dict[str, Any],
     ds_token: str,
     request_id: str,
     gateway_runner: Callable[[str, str, dict[str, Any], str], dict[str, Any]],
-) -> str:
+) -> tuple[str, str]:
     """Find failed task instances and return the first available failed-task log tail."""
     payload = {
         "project_code": alert["project_code"],
@@ -462,8 +563,12 @@ def fetch_failure_reason_from_task_log(
         )
         reason = extract_task_log_failure_reason(log_response)
         if reason:
-            return reason
-    return ""
+            return reason, str(task.get("name") or task.get("taskName") or "").strip()
+    return "", ""
+
+
+def fetch_failure_reason_from_task_log(*args: Any, **kwargs: Any) -> str:
+    return fetch_failure_info_from_task_log(*args, **kwargs)[0]
 
 
 def send_tv_alert(message: str, url: str, bot_id: str, app_id: str = "") -> dict[str, Any]:
@@ -517,12 +622,12 @@ def _mentions_text(mentions: str) -> str:
     return " ".join(f"@{item.strip().lstrip('@')}" for item in str(mentions or "").split(",") if item.strip())
 
 
-def build_retry_progress_message(alert: dict[str, Any], attempts: int, reason: str) -> str:
+def build_retry_progress_message(alert: dict[str, Any], attempts: int, reason: str, mentions: str = "") -> str:
     return "\n".join(
         [
             _alert_payload_text(alert, unwrap_single=False),
             f"定时任务执行失败，失败原因：{reason or '未从 DS 实例详情中解析到明确失败原因，请查看 DS 实例日志'}",
-            f"目前自动失败重试中，执行次数：{attempts}",
+            f"目前自动失败重试中，执行次数：{attempts}{_mentions_text(mentions)}",
         ]
     )
 
@@ -591,6 +696,7 @@ def auto_retry(
     gateway_runner: Callable[[str, str, dict[str, Any], str], dict[str, Any]] | None = None,
     tv_sender: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
     gateway_runner = gateway_runner or (
         lambda action, token, payload, request_id: run_gateway_action(
             action,
@@ -601,7 +707,6 @@ def auto_retry(
         )
     )
     if tv_sender is None:
-        tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
         tv_sender = lambda message: send_tv_alert(
             message,
             tv_config["url"],
@@ -622,22 +727,37 @@ def auto_retry(
     retry_key = alert["retry_key"]
     initial_attempts = current_attempts(state_file, retry_key)
     if initial_attempts >= max_attempts:
-        tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
-        max_attempt_reason = fetch_failure_reason_from_task_log(
+        if max_attempts_notified(state_file, retry_key):
+            return {
+                "success": True,
+                "status": "max_attempts_already_notified",
+                "attempts": initial_attempts,
+            }
+        cached_context = failure_context(state_file, retry_key)
+        max_attempt_reason, task_name = fetch_failure_info_from_task_log(
             alert,
             ds_token,
             f"{normalize_country(alert.get('country') or DEFAULT_COUNTRY)}-ds-auto-retry-{alert['instance_id']}-{initial_attempts}",
             gateway_runner,
         )
+        reason = cached_context["reason"] or max_attempt_reason or GENERIC_FAILURE_REASON
+        mentions = cached_context["mentions"] or resolve_mentions(
+            alert.get("country") or DEFAULT_COUNTRY,
+            task_name or alert.get("task_name") or "",
+            tv_config["mentions"],
+        )
+        if reason != GENERIC_FAILURE_REASON:
+            record_failure_context(state_file, retry_key, reason, mentions)
         message = build_failure_message(
             alert,
             initial_attempts,
             "MAX_ATTEMPTS_REACHED",
             {},
-            tv_config["mentions"],
-            failure_reason=max_attempt_reason,
+            mentions,
+            failure_reason=reason,
         )
         tv_result = tv_sender(message)
+        mark_max_attempts_notified(state_file, retry_key)
         return {
             "success": False,
             "status": "max_attempts_reached",
@@ -661,15 +781,25 @@ def auto_retry(
         }
         pre_check_result = gateway_runner("get_instance", ds_token, payload, f"{request_id}-before")
         progress_reason = extract_failure_reason(pre_check_result)
+        task_name = alert.get("task_name") or ""
         if (
             progress_reason == GENERIC_FAILURE_REASON
             and extract_instance_state(pre_check_result) in TERMINAL_FAILURE_STATES
         ):
-            progress_reason = (
-                fetch_failure_reason_from_task_log(alert, ds_token, request_id, gateway_runner)
-                or progress_reason
+            fetched_reason, fetched_task_name = fetch_failure_info_from_task_log(
+                alert, ds_token, request_id, gateway_runner
             )
-        progress_tv_result = tv_sender(build_retry_progress_message(alert, attempts, progress_reason))
+            progress_reason = fetched_reason or progress_reason
+            task_name = fetched_task_name or task_name
+        cached_context = failure_context(state_file, retry_key)
+        mentions = cached_context["mentions"] or resolve_mentions(
+            country, task_name, tv_config["mentions"]
+        )
+        if progress_reason != GENERIC_FAILURE_REASON:
+            record_failure_context(state_file, retry_key, progress_reason, mentions)
+        else:
+            progress_reason = cached_context["reason"] or progress_reason
+        progress_tv_result = tv_sender(build_retry_progress_message(alert, attempts, progress_reason, mentions))
         last_result = gateway_runner("retry_instance", ds_token, payload, request_id)
         if not last_result.get("ok"):
             state = "RETRY_ACTION_FAILED"
@@ -686,24 +816,34 @@ def auto_retry(
         if state not in TERMINAL_FAILURE_STATES and state not in {"UNKNOWN", "RETRY_ACTION_FAILED"}:
             return {"success": True, "status": "still_running", "attempts": attempts, "state": state}
 
-    tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
     final_reason = extract_failure_reason(last_result)
+    task_name = alert.get("task_name") or ""
     if final_reason == GENERIC_FAILURE_REASON:
-        final_reason = fetch_failure_reason_from_task_log(
+        fetched_reason, fetched_task_name = fetch_failure_info_from_task_log(
             alert,
             ds_token,
             f"{normalize_country(alert.get('country') or DEFAULT_COUNTRY)}-ds-auto-retry-{alert['instance_id']}-{attempts}",
             gateway_runner,
-        ) or final_reason
+        )
+        final_reason = fetched_reason or final_reason
+        task_name = fetched_task_name or task_name
+    cached_context = failure_context(state_file, retry_key)
+    final_reason = cached_context["reason"] or final_reason
+    mentions = cached_context["mentions"] or resolve_mentions(
+        alert.get("country") or DEFAULT_COUNTRY, task_name, tv_config["mentions"]
+    )
+    if final_reason != GENERIC_FAILURE_REASON:
+        record_failure_context(state_file, retry_key, final_reason, mentions)
     message = build_failure_message(
         alert,
         attempts,
         state,
         last_result,
-        tv_config["mentions"],
+        mentions,
         failure_reason=final_reason,
     )
     tv_result = tv_sender(message)
+    mark_max_attempts_notified(state_file, retry_key)
     return {
         "success": False,
         "status": "failed_after_max_attempts",
@@ -732,13 +872,22 @@ def main(argv: list[str] | None = None) -> int:
     ds_token = args.ds_token.strip() or alert.get("ds_token") or os.getenv("DS_TOKEN", "")
     state_file = Path(args.state_file) if args.state_file else default_state_file(country)
 
-    result = auto_retry(
-        alert=alert,
-        ds_token=ds_token,
-        max_attempts=args.max_attempts,
-        retry_delay_seconds=args.retry_delay_seconds,
-        state_file=state_file,
-    )
+    with retry_lock(state_file, alert["retry_key"]) as acquired:
+        if not acquired:
+            result = {
+                "success": True,
+                "status": "already_running",
+                "instance_id": alert["instance_id"],
+                "retry_key": alert["retry_key"],
+            }
+        else:
+            result = auto_retry(
+                alert=alert,
+                ds_token=ds_token,
+                max_attempts=args.max_attempts,
+                retry_delay_seconds=args.retry_delay_seconds,
+                state_file=state_file,
+            )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0 if result.get("success") else 1
 
