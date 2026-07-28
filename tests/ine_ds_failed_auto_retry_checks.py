@@ -414,6 +414,23 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
             self.assertEqual(generic_retry.resolve_mentions("mx", "任务", ""), "kuiwu@kn.group")
             self.assertEqual(generic_retry.resolve_mentions("cn", "任务", ""), "gretchenhe@kn.group")
 
+    def test_generic_retry_compacts_long_instance_error_message(self):
+        long_reason = "\n".join(
+            [
+                "java.sql.SQLSyntaxErrorException: Unknown table dm_analyst.missing_table",
+                "at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:121)",
+                "2026-07-28 ERROR - executor failed",
+                "Caused by: java.sql.SQLSyntaxErrorException: Unknown table dm_analyst.missing_table",
+                "at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:122)",
+            ]
+        )
+
+        reason = generic_retry.extract_failure_reason(
+            {"stdout": {"success": True, "data": {"state": "FAILURE", "errorMessage": long_reason}}}
+        )
+
+        self.assertEqual(reason, "java.sql.SQLSyntaxErrorException: Unknown table dm_analyst.missing_table")
+
 
 if __name__ == "__main__":
     unittest.main()

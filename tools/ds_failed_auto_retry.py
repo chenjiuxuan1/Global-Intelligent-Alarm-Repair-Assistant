@@ -425,10 +425,13 @@ def extract_failure_reason(response: dict[str, Any]) -> str:
             continue
         text = str(item).strip()
         if text and text.lower() not in {"success", "ok", "none", "null"}:
-            return text[:1000]
+            # DS may put the complete worker log into errorMessage. Apply the
+            # same root-cause extraction used for get_task_log so a progress
+            # alert never expands into Java stack frames and duplicate lines.
+            return _summarize_task_log(text) or text[:1000]
     stderr = str(response.get("stderr") or "").strip()
     if stderr:
-        return stderr[:1000]
+        return _summarize_task_log(stderr) or stderr[:1000]
     return GENERIC_FAILURE_REASON
 
 
