@@ -550,35 +550,48 @@ def fetch_failure_info_from_task_log(
     ds_token: str,
     request_id: str,
     gateway_runner: Callable[[str, str, dict[str, Any], str], dict[str, Any]],
+    lookup_attempts: int = 1,
+    lookup_delay_seconds: int = 0,
+    sleep: Callable[[int], None] = time.sleep,
 ) -> tuple[str, str]:
-    """Find failed task instances and return the first available failed-task log tail."""
+    """Find failed task instances and return the first available failed-task log tail.
+
+    DS emits a process failure alert before its task-instance list and worker log
+    are occasionally visible. Retry this read-only lookup briefly in that case.
+    """
     payload = {
         "project_code": alert["project_code"],
         "instance_id": alert["instance_id"],
         "process_instance_id": alert["instance_id"],
         "page_size": 100,
     }
-    task_list_response = gateway_runner("list_task_instances", ds_token, payload, f"{request_id}-tasks")
-    failed_tasks = [task for task in _task_instances_from_response(task_list_response) if _is_failed_task(task)]
-    for task in failed_tasks:
-        task_instance_id = task.get("id") or task.get("taskInstanceId")
-        if not task_instance_id:
-            continue
-        log_response = gateway_runner(
-            "get_task_log",
-            ds_token,
-            {
-                **payload,
-                "task_instance_id": task_instance_id,
-                "task_name": task.get("name") or task.get("taskName") or "",
-                "task_code": task.get("taskCode") or "",
-                "limit": 2000,
-            },
-            f"{request_id}-task-{task_instance_id}-log",
+    lookup_attempts = max(1, int(lookup_attempts))
+    for lookup_index in range(lookup_attempts):
+        task_list_response = gateway_runner(
+            "list_task_instances", ds_token, payload, f"{request_id}-tasks-{lookup_index + 1}"
         )
-        reason = extract_task_log_failure_reason(log_response)
-        if reason:
-            return reason, str(task.get("name") or task.get("taskName") or "").strip()
+        failed_tasks = [task for task in _task_instances_from_response(task_list_response) if _is_failed_task(task)]
+        for task in failed_tasks:
+            task_instance_id = task.get("id") or task.get("taskInstanceId")
+            if not task_instance_id:
+                continue
+            log_response = gateway_runner(
+                "get_task_log",
+                ds_token,
+                {
+                    **payload,
+                    "task_instance_id": task_instance_id,
+                    "task_name": task.get("name") or task.get("taskName") or "",
+                    "task_code": task.get("taskCode") or "",
+                    "limit": 2000,
+                },
+                f"{request_id}-task-{task_instance_id}-log-{lookup_index + 1}",
+            )
+            reason = extract_task_log_failure_reason(log_response)
+            if reason:
+                return reason, str(task.get("name") or task.get("taskName") or "").strip()
+        if lookup_index + 1 < lookup_attempts and lookup_delay_seconds > 0:
+            sleep(lookup_delay_seconds)
     return "", ""
 
 
@@ -712,6 +725,8 @@ def auto_retry(
     tv_sender: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
+    reason_lookup_attempts = max(1, int(os.getenv("DS_FAILED_REASON_LOOKUP_ATTEMPTS", "3")))
+    reason_lookup_delay_seconds = max(0, int(os.getenv("DS_FAILED_REASON_LOOKUP_DELAY_SECONDS", "5")))
     gateway_runner = gateway_runner or (
         lambda action, token, payload, request_id: run_gateway_action(
             action,
@@ -754,6 +769,9 @@ def auto_retry(
             ds_token,
             f"{normalize_country(alert.get('country') or DEFAULT_COUNTRY)}-ds-auto-retry-{alert['instance_id']}-{initial_attempts}",
             gateway_runner,
+            lookup_attempts=reason_lookup_attempts,
+            lookup_delay_seconds=reason_lookup_delay_seconds,
+            sleep=sleep,
         )
         reason = cached_context["reason"] or max_attempt_reason or GENERIC_FAILURE_REASON
         mentions = cached_context["mentions"] or resolve_mentions(
@@ -802,7 +820,13 @@ def auto_retry(
             and extract_instance_state(pre_check_result) in TERMINAL_FAILURE_STATES
         ):
             fetched_reason, fetched_task_name = fetch_failure_info_from_task_log(
-                alert, ds_token, request_id, gateway_runner
+                alert,
+                ds_token,
+                request_id,
+                gateway_runner,
+                lookup_attempts=reason_lookup_attempts,
+                lookup_delay_seconds=reason_lookup_delay_seconds,
+                sleep=sleep,
             )
             progress_reason = fetched_reason or progress_reason
             task_name = fetched_task_name or task_name
@@ -839,6 +863,9 @@ def auto_retry(
             ds_token,
             f"{normalize_country(alert.get('country') or DEFAULT_COUNTRY)}-ds-auto-retry-{alert['instance_id']}-{attempts}",
             gateway_runner,
+            lookup_attempts=reason_lookup_attempts,
+            lookup_delay_seconds=reason_lookup_delay_seconds,
+            sleep=sleep,
         )
         final_reason = fetched_reason or final_reason
         task_name = fetched_task_name or task_name

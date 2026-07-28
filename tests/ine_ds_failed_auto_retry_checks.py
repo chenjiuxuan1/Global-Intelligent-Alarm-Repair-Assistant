@@ -125,7 +125,7 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["status"], "failed_after_max_attempts")
         self.assertEqual(result["attempts"], 3)
-        self.assertEqual(sleeps, [180, 180, 180])
+        self.assertEqual([seconds for seconds in sleeps if seconds == 180], [180, 180, 180])
         self.assertEqual(len(tv_messages), 4)
         self.assertIn("目前自动失败重试中，执行次数：1", tv_messages[0])
         self.assertIn("目前自动失败重试中，执行次数：2", tv_messages[1])
