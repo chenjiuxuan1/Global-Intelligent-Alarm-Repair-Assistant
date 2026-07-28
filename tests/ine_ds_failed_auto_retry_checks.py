@@ -322,6 +322,47 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertIn("ERROR Table test_missing_table does not exist", messages[0])
         self.assertIn("ERROR Table test_missing_table does not exist", messages[-1])
 
+    def test_generic_retry_max_attempt_summary_uses_concise_task_log_root_cause(self):
+        messages = []
+
+        def gateway(action, token, payload, request_id):
+            if action == "list_task_instances":
+                return {
+                    "ok": True,
+                    "stdout": {"success": True, "data": {"data": {"totalList": [{"id": 88, "state": 6}]}}},
+                }
+            if action == "get_task_log":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {
+                            "log": "ERROR executor failed\nCaused by: java.sql.SQLSyntaxErrorException: Unknown table test_missing_table\nat stack.frame",
+                        },
+                    },
+                }
+            raise AssertionError(f"unexpected action: {action}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            generic_retry.record_attempt(state_file, "mx:100:200")
+            generic_retry.record_attempt(state_file, "mx:100:200")
+            generic_retry.record_attempt(state_file, "mx:100:200")
+            result = generic_retry.auto_retry(
+                alert={"country": "mx", "project_code": "100", "instance_id": "200", "retry_key": "mx:100:200"},
+                ds_token="token",
+                max_attempts=3,
+                retry_delay_seconds=0,
+                state_file=state_file,
+                sleep=lambda _: None,
+                gateway_runner=gateway,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+            )
+
+        self.assertEqual(result["status"], "max_attempts_reached")
+        self.assertIn("java.sql.SQLSyntaxErrorException: Unknown table test_missing_table", messages[0])
+        self.assertNotIn("at stack.frame", messages[0])
+
 
 if __name__ == "__main__":
     unittest.main()

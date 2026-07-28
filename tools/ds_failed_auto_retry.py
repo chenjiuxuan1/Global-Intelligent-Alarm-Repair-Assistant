@@ -405,13 +405,17 @@ def _summarize_task_log(value: Any) -> str:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return ""
-    error_lines = [
-        line
-        for line in lines
-        if any(marker in line.lower() for marker in ("error", "exception", "caused by", "failed", "失败"))
-    ]
-    selected = error_lines[-8:] if error_lines else lines[-12:]
-    return "\n".join(selected)[-1000:]
+    # A Java `Caused by` line is usually the root cause. Prefer it to executor
+    # messages and stack frames so TV notifications remain actionable.
+    for line in reversed(lines):
+        if "caused by:" in line.lower():
+            return line.split(":", 1)[1].strip()[:1000]
+
+    for line in reversed(lines):
+        if any(marker in line.lower() for marker in ("exception", "error", "failed", "失败")):
+            return line[:1000]
+
+    return lines[-1][:1000]
 
 
 def extract_task_log_failure_reason(response: dict[str, Any]) -> str:
@@ -619,7 +623,20 @@ def auto_retry(
     initial_attempts = current_attempts(state_file, retry_key)
     if initial_attempts >= max_attempts:
         tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
-        message = build_failure_message(alert, initial_attempts, "MAX_ATTEMPTS_REACHED", {}, tv_config["mentions"])
+        max_attempt_reason = fetch_failure_reason_from_task_log(
+            alert,
+            ds_token,
+            f"{normalize_country(alert.get('country') or DEFAULT_COUNTRY)}-ds-auto-retry-{alert['instance_id']}-{initial_attempts}",
+            gateway_runner,
+        )
+        message = build_failure_message(
+            alert,
+            initial_attempts,
+            "MAX_ATTEMPTS_REACHED",
+            {},
+            tv_config["mentions"],
+            failure_reason=max_attempt_reason,
+        )
         tv_result = tv_sender(message)
         return {
             "success": False,
