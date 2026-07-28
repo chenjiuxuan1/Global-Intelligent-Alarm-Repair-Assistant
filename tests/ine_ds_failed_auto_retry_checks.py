@@ -288,7 +288,10 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
                     "ok": True,
                     "stdout": {
                         "success": True,
-                        "data": {"totalList": [{"id": 88, "name": "失败SQL", "state": "FAILURE"}]},
+                        "data": {
+                            "code": 0,
+                            "data": {"totalList": [{"id": 88, "name": "失败SQL", "state": "FAILURE"}]},
+                        },
                     },
                 }
             if action == "get_task_log":

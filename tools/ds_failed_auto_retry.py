@@ -366,16 +366,23 @@ def extract_failure_reason(response: dict[str, Any]) -> str:
 def _task_instances_from_response(response: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract task instances from the gateway's list_task_instances response."""
     data = response.get("stdout", response)
-    if not isinstance(data, dict):
-        return []
-    payload = data.get("data")
-    if isinstance(payload, dict):
-        for key in ("totalList", "records", "list"):
-            items = payload.get(key)
-            if isinstance(items, list):
-                return [item for item in items if isinstance(item, dict)]
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
+    candidates: list[Any] = [data]
+    # The local gateway wraps the original DS response once, and DS itself
+    # commonly wraps list rows in another `data` object.
+    for _ in range(3):
+        current = candidates[-1]
+        if not isinstance(current, dict) or "data" not in current:
+            break
+        candidates.append(current["data"])
+
+    for payload in candidates:
+        if isinstance(payload, dict):
+            for key in ("totalList", "records", "list"):
+                items = payload.get(key)
+                if isinstance(items, list):
+                    return [item for item in items if isinstance(item, dict)]
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
     return []
 
 
