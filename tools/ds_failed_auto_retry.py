@@ -64,6 +64,12 @@ COUNTRY_FALLBACK_MENTIONS = {
 }
 
 
+def _is_failure_wrapper_reason(reason: str) -> bool:
+    """Return whether DS returned the ETL launcher's generic final line."""
+    normalized = re.sub(r"\s+", " ", str(reason or "")).strip().lower()
+    return bool(re.search(r"\b(?:console\s*-\s*)?error\s*-\s*run etl fail\b", normalized))
+
+
 def _load_dotenv(path: Path) -> None:
     if not path.exists():
         return
@@ -428,10 +434,14 @@ def extract_failure_reason(response: dict[str, Any]) -> str:
             # DS may put the complete worker log into errorMessage. Apply the
             # same root-cause extraction used for get_task_log so a progress
             # alert never expands into Java stack frames and duplicate lines.
-            return _summarize_task_log(text) or text[:1000]
+            summary = _summarize_task_log(text) or text[:1000]
+            if not _is_failure_wrapper_reason(summary):
+                return summary
     stderr = str(response.get("stderr") or "").strip()
     if stderr:
-        return _summarize_task_log(stderr) or stderr[:1000]
+        summary = _summarize_task_log(stderr) or stderr[:1000]
+        if not _is_failure_wrapper_reason(summary):
+            return summary
     return GENERIC_FAILURE_REASON
 
 
@@ -838,7 +848,6 @@ def auto_retry(
             record_failure_context(state_file, retry_key, progress_reason, mentions)
         else:
             progress_reason = cached_context["reason"] or progress_reason
-        progress_tv_result = tv_sender(build_retry_progress_message(alert, attempts, progress_reason, mentions))
         last_result = gateway_runner("retry_instance", ds_token, payload, request_id)
         if not last_result.get("ok"):
             state = "RETRY_ACTION_FAILED"

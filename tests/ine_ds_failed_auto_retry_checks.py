@@ -88,8 +88,7 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(result["status"], "recovered")
         self.assertEqual(result["attempts"], 1)
         self.assertEqual([call[0] for call in calls], ["get_instance", "retry_instance", "get_instance"])
-        self.assertEqual(len(tv_messages), 1)
-        self.assertIn("目前自动失败重试中，执行次数：1", tv_messages[0])
+        self.assertEqual(tv_messages, [])
 
     def test_auto_retry_sends_tv_after_three_failed_attempts(self):
         tv_messages = []
@@ -126,13 +125,10 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(result["status"], "failed_after_max_attempts")
         self.assertEqual(result["attempts"], 3)
         self.assertEqual([seconds for seconds in sleeps if seconds == 180], [180, 180, 180])
-        self.assertEqual(len(tv_messages), 4)
-        self.assertIn("目前自动失败重试中，执行次数：1", tv_messages[0])
-        self.assertIn("目前自动失败重试中，执行次数：2", tv_messages[1])
-        self.assertIn("目前自动失败重试中，执行次数：3", tv_messages[2])
-        self.assertIn("目前自动失败重试中，执行次数：3", tv_messages[3])
-        self.assertIn("当前重试次数已达上限", tv_messages[3])
-        self.assertIn("INE-DWD", tv_messages[3])
+        self.assertEqual(len(tv_messages), 1)
+        self.assertIn("目前自动失败重试中，执行次数：3", tv_messages[0])
+        self.assertIn("当前重试次数已达上限", tv_messages[0])
+        self.assertIn("INE-DWD", tv_messages[0])
 
     def test_payload_b64_cli_shape_is_json_decodable(self):
         raw = {"project_code": "100", "instance_id": "200"}
@@ -321,6 +317,54 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertIn("get_task_log", calls)
         self.assertIn("ERROR Table test_missing_table does not exist", messages[0])
         self.assertIn("ERROR Table test_missing_table does not exist", messages[-1])
+
+    def test_generic_retry_replaces_run_etl_fail_wrapper_with_task_log_root_cause(self):
+        messages = []
+
+        def gateway(action, token, payload, request_id):
+            if action == "get_instance":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {
+                            "state": "FAILURE",
+                            "errorMessage": "2026-07-29 console - ERROR - run etl fail",
+                        },
+                    },
+                }
+            if action == "list_task_instances":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {"data": {"totalList": [{"id": 88, "name": "dwd_orders", "state": "FAILURE"}]}},
+                    },
+                }
+            if action == "get_task_log":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {"log": "INFO start\nCaused by: java.sql.SQLSyntaxErrorException: Unknown table dw.dwd_orders\n"},
+                    },
+                }
+            return {"ok": True, "stdout": {"success": True}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            generic_retry.auto_retry(
+                alert={"country": "ph", "project_code": "100", "instance_id": "200", "retry_key": "ph:100:200"},
+                ds_token="token",
+                max_attempts=1,
+                retry_delay_seconds=0,
+                state_file=Path(tmp) / "state.json",
+                sleep=lambda _: None,
+                gateway_runner=gateway,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+            )
+
+        self.assertIn("java.sql.SQLSyntaxErrorException: Unknown table dw.dwd_orders", messages[0])
+        self.assertNotIn("run etl fail", messages[0])
 
     def test_generic_retry_max_attempt_summary_uses_concise_task_log_root_cause(self):
         messages = []
