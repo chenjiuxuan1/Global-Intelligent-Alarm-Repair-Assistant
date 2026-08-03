@@ -65,9 +65,34 @@ COUNTRY_FALLBACK_MENTIONS = {
 
 
 def _is_failure_wrapper_reason(reason: str) -> bool:
-    """Return whether DS returned the ETL launcher's generic final line."""
+    """Return whether DS returned the ETL launcher's generic final line.
+
+    Matches the full DS log form (``console - ERROR - run etl fail``) as well as
+    the bare form (``run etl fail``) that remains after prefix stripping.
+    """
     normalized = re.sub(r"\s+", " ", str(reason or "")).strip().lower()
-    return bool(re.search(r"\b(?:console\s*-\s*)?error\s*-\s*run etl fail\b", normalized))
+    return bool(
+        re.search(r"\b(?:console\s*-\s*)?(?:error\s*-\s*)?run etl fail\b", normalized)
+    )
+
+
+# DolphinScheduler worker logs wrap every task-output line with a prefix like
+# ``2026-08-03 18:25:27.026 INFO  -  -> ``.  The ETL launcher itself adds a
+# second prefix (``2026-08-03 18:25:27,026 - console - ERROR - ``).  Strip both
+# so the failure reason surfaced in TV alerts is the actual task message.
+_DS_LOG_PREFIX_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[.,]\d{3}\s+\w+\s+-\s+->\s*"
+)
+_TASK_LOG_PREFIX_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[.,]\d{3}\s+-\s+\S+\s+-\s+\w+\s+-\s*"
+)
+
+
+def _strip_ds_log_prefix(line: str) -> str:
+    """Remove DolphinScheduler and task-internal log prefixes from a single line."""
+    line = _DS_LOG_PREFIX_RE.sub("", line, count=1)
+    line = _TASK_LOG_PREFIX_RE.sub("", line, count=1)
+    return line.strip()
 
 
 def _load_dotenv(path: Path) -> None:
@@ -480,24 +505,38 @@ def _is_failed_task(task: dict[str, Any]) -> bool:
 
 
 def _summarize_task_log(value: Any) -> str:
-    """Return a compact, useful tail from a DS task log."""
+    """Return a compact, useful tail from a DS task log.
+
+    The ETL launcher always emits a generic ``ERROR - run etl fail`` as its final
+    line.  That line is *not* the root cause, so skip it (and any other wrapper
+    variant) when scanning backwards for the real error.
+    """
     text = str(value or "").strip()
     if not text:
         return ""
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = [_strip_ds_log_prefix(line) for line in text.splitlines() if line.strip()]
+    lines = [line for line in lines if line]
     if not lines:
         return ""
     # A Java `Caused by` line is usually the root cause. Prefer it to executor
     # messages and stack frames so TV notifications remain actionable.
     for line in reversed(lines):
-        if "caused by:" in line.lower():
-            return line.split(":", 1)[1].strip()[:1000]
+        match = re.search(r"caused by:\s*(.+)", line, flags=re.IGNORECASE)
+        if match:
+            caused = match.group(1).strip()[:1000]
+            if caused and not _is_failure_wrapper_reason(caused):
+                return caused
 
     for line in reversed(lines):
         if any(marker in line.lower() for marker in ("exception", "error", "failed", "失败")):
+            if _is_failure_wrapper_reason(line):
+                continue
             return line[:1000]
 
-    return lines[-1][:1000]
+    # Fall back to the last line, but never surface the generic ETL wrapper.
+    if not _is_failure_wrapper_reason(lines[-1]):
+        return lines[-1][:1000]
+    return ""
 
 
 def extract_task_log_failure_reason(response: dict[str, Any]) -> str:
@@ -506,7 +545,7 @@ def extract_task_log_failure_reason(response: dict[str, Any]) -> str:
     for key, value in _walk_values(data):
         if str(key).lower() in {"log", "logcontent", "log_content", "content"}:
             summary = _summarize_task_log(value)
-            if summary:
+            if summary and not _is_failure_wrapper_reason(summary):
                 return summary
     return ""
 

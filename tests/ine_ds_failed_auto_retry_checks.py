@@ -475,6 +475,63 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
 
         self.assertEqual(reason, "java.sql.SQLSyntaxErrorException: Unknown table dm_analyst.missing_table")
 
+    def test_summarize_skips_run_etl_fail_wrapper(self):
+        """The generic 'run etl fail' line must not be surfaced as the reason."""
+        log_text = (
+            "2026-08-03 18:25:20.000 INFO  -  -> welcome info\n"
+            "2026-08-03 18:25:25.000 INFO  -  -> 2026-08-03 18:25:25,000 - console - "
+            "ERROR - java.sql.SQLSyntaxErrorException: Unknown table dw.dwd_order\n"
+            "2026-08-03 18:25:27.026 INFO  -  -> 2026-08-03 18:25:27,026 - console - "
+            "ERROR - run etl fail"
+        )
+        reason = generic_retry._summarize_task_log(log_text)
+        self.assertIn("Unknown table dw.dwd_order", reason)
+        self.assertNotIn("run etl fail", reason)
+
+    def test_summarize_strips_ds_prefix_from_error_line(self):
+        """DS worker-log prefix should be stripped for a clean alert message."""
+        log_text = (
+            "2026-08-03 18:25:25.000 INFO  -  -> 2026-08-03 18:25:25,000 - console - "
+            "ERROR - Connection refused: connect"
+        )
+        reason = generic_retry._summarize_task_log(log_text)
+        self.assertNotIn("INFO  -  ->", reason)
+        self.assertIn("Connection refused", reason)
+
+    def test_extract_task_log_reason_filters_wrapper_only_log(self):
+        """When the only error line is 'run etl fail', return empty (not the wrapper)."""
+        log_text = (
+            "2026-08-03 18:25:20.000 INFO  -  -> starting etl\n"
+            "2026-08-03 18:25:27.026 INFO  -  -> 2026-08-03 18:25:27,026 - console - "
+            "ERROR - run etl fail"
+        )
+        response = {"stdout": {"success": True, "data": {"log": log_text}}}
+        reason = generic_retry.extract_task_log_failure_reason(response)
+        self.assertEqual(reason, "")
+
+    def test_extract_task_log_reason_finds_real_error_before_wrapper(self):
+        """Full gateway response: real error must win over the 'run etl fail' wrapper."""
+        log_text = (
+            "2026-08-03 18:25:20.000 INFO  -  -> starting etl\n"
+            "2026-08-03 18:25:22.000 INFO  -  -> 2026-08-03 18:25:22,000 - console - "
+            "ERROR - NullPointerException: cannot invoke method on null object\n"
+            "2026-08-03 18:25:27.026 INFO  -  -> 2026-08-03 18:25:27,026 - console - "
+            "ERROR - run etl fail"
+        )
+        response = {
+            "stdout": {
+                "success": True,
+                "data": {
+                    "log": log_text,
+                    "task_name": "dwd_user_order",
+                    "raw_result": {"data": {"content": log_text}},
+                },
+            }
+        }
+        reason = generic_retry.extract_task_log_failure_reason(response)
+        self.assertIn("NullPointerException", reason)
+        self.assertNotIn("run etl fail", reason)
+
 
 if __name__ == "__main__":
     unittest.main()
