@@ -731,6 +731,44 @@ def build_failure_message(
     )
 
 
+def build_recovered_message(
+    alert: dict[str, Any],
+    attempts: int,
+    reason: str,
+    mentions: str = "",
+) -> str:
+    tail = f"自动重跑已恢复成功，重跑次数：{attempts}"
+    mention_text = _mentions_text(mentions)
+    if mention_text:
+        tail = f"{tail}{mention_text}"
+    return "\n".join(
+        [
+            _alert_payload_text(alert),
+            f"定时任务原失败原因：{reason or GENERIC_FAILURE_REASON}",
+            tail,
+        ]
+    )
+
+
+def build_still_running_message(
+    alert: dict[str, Any],
+    attempts: int,
+    reason: str,
+    mentions: str = "",
+) -> str:
+    tail = f"自动重跑后任务仍在运行中，重跑次数：{attempts}"
+    mention_text = _mentions_text(mentions)
+    if mention_text:
+        tail = f"{tail}{mention_text}"
+    return "\n".join(
+        [
+            _alert_payload_text(alert),
+            f"定时任务原失败原因：{reason or GENERIC_FAILURE_REASON}",
+            tail,
+        ]
+    )
+
+
 def build_failure_debug_message(alert: dict[str, Any], attempts: int, state: str, last_result: dict[str, Any]) -> str:
     country = normalize_country(alert.get("country") or DEFAULT_COUNTRY)
     country_name = COUNTRY_NAMES.get(country, country)
@@ -898,10 +936,16 @@ def auto_retry(
 
         if state in SUCCESS_STATES:
             clear_attempts(state_file, retry_key)
-            return {"success": True, "status": "recovered", "attempts": attempts, "state": state}
+            recovered_reason = progress_reason if progress_reason != GENERIC_FAILURE_REASON else cached_context["reason"]
+            recovered_message = build_recovered_message(alert, attempts, recovered_reason, mentions)
+            recovered_tv_result = tv_sender(recovered_message)
+            return {"success": True, "status": "recovered", "attempts": attempts, "state": state, "tv_result": recovered_tv_result}
 
         if state not in TERMINAL_FAILURE_STATES and state not in {"UNKNOWN", "RETRY_ACTION_FAILED"}:
-            return {"success": True, "status": "still_running", "attempts": attempts, "state": state}
+            running_reason = progress_reason if progress_reason != GENERIC_FAILURE_REASON else cached_context["reason"]
+            running_message = build_still_running_message(alert, attempts, running_reason, mentions)
+            running_tv_result = tv_sender(running_message)
+            return {"success": True, "status": "still_running", "attempts": attempts, "state": state, "tv_result": running_tv_result}
 
     final_reason = extract_failure_reason(last_result)
     task_name = alert.get("task_name") or ""
