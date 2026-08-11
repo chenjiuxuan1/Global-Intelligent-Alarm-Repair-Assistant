@@ -3,11 +3,142 @@
   "nodes": [
     {
       "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@10.20.47.14 \"set -e; repo=/root/ds-scheduler-gateway; tmp_dir=/tmp/ds-scheduler-gateway-main.\\$\\$; zip_file=/tmp/ds-scheduler-gateway-main.zip; rm -rf \\\"\\$tmp_dir\\\"; mkdir -p \\\"\\$tmp_dir\\\"; curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 -o \\\"\\$zip_file\\\" https://codeload.github.com/chenjiuxuan1/ds-scheduler-gateway/zip/refs/heads/main; python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \\\"\\$zip_file\\\" \\\"\\$tmp_dir\\\"; src_dir=\\$(find \\\"\\$tmp_dir\\\" -mindepth 1 -maxdepth 1 -type d -name 'ds-scheduler-gateway-*' -print -quit); [ -n \\\"\\$src_dir\\\" ] || { echo 'gateway ZIP has no source directory' >&2; exit 1; }; cd \\\"\\$repo\\\" || exit 1; find \\\"\\$repo\\\" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +; cp -a \\\"\\$src_dir\\\"/. \\\"\\$repo\\\"/; rm -rf \\\"\\$tmp_dir\\\"; rm -f \\\"\\$zip_file\\\"; echo 'archive/main'\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        14224,
+        -1104
+      ],
+      "id": "451c4359-5007-4a1c-a568-e48e1ee34e8c",
+      "name": "中国更新DS网关代码",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "wGL20YUQ7ZpN1xRA",
+          "name": "中国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh root@10.20.10.12 \"cd /root/ds-scheduler-gateway || exit 1; git remote remove gateway-github >/dev/null 2>&1 || true; git remote add gateway-github https://github.com/chenjiuxuan1/ds-scheduler-gateway.git; git fetch --prune gateway-github main || exit 1; git checkout main >/dev/null 2>&1 || git checkout -b main || exit 1; git reset --hard FETCH_HEAD || exit 1; git branch --set-upstream-to=gateway-github/main main >/dev/null 2>&1 || true; git clean -fd; git rev-parse --short HEAD\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        14416,
+        -1104
+      ],
+      "id": "5cee2346-fa8c-4973-af63-c962cd771f95",
+      "name": "菲律宾更新DS网关代码",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "MQWXoKIQxg8ae2Nt",
+          "name": "菲律宾跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@192.168.21.236 \"cd /root/ds-scheduler-gateway || exit 1; git remote remove gateway-github >/dev/null 2>&1 || true; git remote add gateway-github https://github.com/chenjiuxuan1/ds-scheduler-gateway.git; git fetch --prune gateway-github main || exit 1; git checkout main >/dev/null 2>&1 || git checkout -b main || exit 1; git reset --hard FETCH_HEAD || exit 1; git branch --set-upstream-to=gateway-github/main main >/dev/null 2>&1 || true; git clean -fd; git rev-parse --short HEAD\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        14608,
+        -1104
+      ],
+      "id": "98b31911-0167-4f5f-8e16-1de1e38570cd",
+      "name": "印尼更新DS网关代码",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SyHW5nXUCnuULr2c",
+          "name": "印尼跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@172.20.220.165 \"cd /root/ds-scheduler-gateway || exit 1; git remote remove gateway-github >/dev/null 2>&1 || true; git remote add gateway-github https://github.com/chenjiuxuan1/ds-scheduler-gateway.git; git fetch --prune gateway-github main || exit 1; git checkout main >/dev/null 2>&1 || git checkout -b main || exit 1; git reset --hard FETCH_HEAD || exit 1; git branch --set-upstream-to=gateway-github/main main >/dev/null 2>&1 || true; git clean -fd; git rev-parse --short HEAD\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        14800,
+        -1104
+      ],
+      "id": "709bd2d6-60d2-4fa8-b363-2f70ba350dc0",
+      "name": "墨西哥更新DS网关代码",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "7oQDoS8H2buTjr7H",
+          "name": "墨西哥跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@192.168.20.236 \"cd /root/ds-scheduler-gateway || exit 1; git remote remove gateway-github >/dev/null 2>&1 || true; git remote add gateway-github https://github.com/chenjiuxuan1/ds-scheduler-gateway.git; git fetch --prune gateway-github main || exit 1; git checkout main >/dev/null 2>&1 || git checkout -b main || exit 1; git reset --hard FETCH_HEAD || exit 1; git branch --set-upstream-to=gateway-github/main main >/dev/null 2>&1 || true; git clean -fd; git rev-parse --short HEAD\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        15008,
+        -1104
+      ],
+      "id": "fee7d656-7b82-4df7-a99a-3cf2ddf9c58e",
+      "name": "泰国更新DS网关代码",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SliSXhrkW6tiEFFo",
+          "name": "泰国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh root@10.20.84.176 \"cd /root/ds-scheduler-gateway || exit 1; git remote remove gateway-github >/dev/null 2>&1 || true; git remote add gateway-github https://github.com/chenjiuxuan1/ds-scheduler-gateway.git; git fetch --prune gateway-github main || exit 1; git checkout main >/dev/null 2>&1 || git checkout -b main || exit 1; git reset --hard FETCH_HEAD || exit 1; git branch --set-upstream-to=gateway-github/main main >/dev/null 2>&1 || true; git clean -fd; git rev-parse --short HEAD\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        15216,
+        -1104
+      ],
+      "id": "a6730f4d-2f31-40cd-8d64-d4b34da71a43",
+      "name": "巴基斯坦更新DS网关代码",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "W8NbqcmBWoI5MZ3s",
+          "name": "巴基斯坦跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: {\n  success: true,\n  updated_countries: ['cn', 'ph', 'ine', 'mx', 'th', 'pk'],\n  updated_components: ['ds-scheduler-gateway', 'Global-Intelligent-Alarm-Repair-Assistant'],\n  message: '六国 DS 网关与失败自动重跑代码均已更新成功。',\n} }];"
+      },
+      "name": "构造全部更新成功响应",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        15392,
+        -816
+      ],
+      "id": "5ce53363-0858-429b-8b5b-c73ac53fca14"
+    },
+    {
+      "parameters": {
         "httpMethod": "POST",
         "path": "ds-failed-auto-rerun",
-        "responseMode": "onReceived",
         "options": {
-          "responseCode": 200,
           "responseHeaders": {
             "entries": [
               {
@@ -16,30 +147,29 @@
               }
             ]
           }
-        },
-        "responseData": "firstEntryJson"
+        }
       },
-      "id": "a3512c1d-1048-47f7-9b40-34254f94257d",
+      "id": "81c18a23-6306-43f1-a8f3-b20a5ccdcecc",
       "name": "DS失败告警Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
-        320,
-        260
+        14784,
+        -112
       ],
       "webhookId": "ds-failed-auto-rerun-all-countries"
     },
     {
       "parameters": {
-        "jsCode": "const raw = $json.body ?? $json;\nconst headers = $json.headers || {};\n\nconst COUNTRIES = {\n  cn: { key: 'cn', name: '中国', ssh: 'ssh -p 36000 root@10.20.47.14', legacyRepo: '/root/CN-Intelligent-Alarm-Repair-Assistant', sync: 'archive' },\n  th: { key: 'th', name: '泰国', ssh: 'ssh -p 36000 root@192.168.20.236', legacyRepo: '/root/TH-Intelligent-Alarm-Repair-Assistant', sync: 'git' },\n  ine: { key: 'ine', name: '印尼', ssh: 'ssh -p 36000 root@192.168.21.236', legacyRepo: '/root/INE-Intelligent-Alarm-Repair-Assistant', sync: 'git' },\n  pk: { key: 'pk', name: '巴基斯坦', ssh: 'ssh root@10.20.84.176', legacyRepo: '/root/PK-Intelligent-Alarm-Repair-Assistant', sync: 'git' },\n  mx: { key: 'mx', name: '墨西哥', ssh: 'ssh -p 36000 root@172.20.220.165', legacyRepo: '/root/MX-Intelligent-Alarm-Repair-Assistant', sync: 'git' },\n  ph: { key: 'ph', name: '菲律宾', ssh: 'ssh root@10.20.10.12', legacyRepo: '/root/PH-Intelligent-Alarm-Repair-Assistant', sync: 'git' },\n};\n\nfunction findValue(value, names) {\n  if (!value || typeof value !== 'object') return '';\n  if (Array.isArray(value)) {\n    for (const item of value) {\n      const found = findValue(item, names);\n      if (found) return found;\n    }\n    return '';\n  }\n  for (const [key, item] of Object.entries(value)) {\n    if (names.has(String(key).toLowerCase()) && item !== undefined && item !== null && item !== '') {\n      return String(item).trim();\n    }\n    const found = findValue(item, names);\n    if (found) return found;\n  }\n  return '';\n}\n\nfunction normalizeCountry(value) {\n  const text = String(value || '').trim().toLowerCase();\n  if (['id', 'indonesia', '印尼'].includes(text)) return 'ine';\n  if (['cn', 'china', '中国'].includes(text)) return 'cn';\n  if (['th', 'thai', 'thailand', '泰国'].includes(text)) return 'th';\n  if (['pk', 'pakistan', '巴基斯坦'].includes(text)) return 'pk';\n  if (['mx', 'mexico', '墨西哥'].includes(text)) return 'mx';\n  if (['ph', 'philippines', '菲律宾'].includes(text)) return 'ph';\n  return text;\n}\n\nfunction inferCountryFromPayload(value) {\n  const explicit = findValue(value, new Set(['country', 'country_code', 'countrycode', 'app_country']));\n  if (explicit) return explicit;\n  const projectName = findValue(value, new Set(['project_name', 'projectname']));\n  const workflowName = findValue(value, new Set(['workflow_name', 'workflowname', 'workflow_instance_name', 'workflowinstancename', 'process_definition_name', 'processdefinitionname']));\n  const text = `${projectName} ${workflowName}`;\n  if (/菲律宾|philippines|\\bph\\b/i.test(text)) return 'ph';\n  if (/印尼|indonesia|\\bine\\b|\\bid\\b/i.test(text)) return 'ine';\n  if (/中国|china|\\bcn\\b/i.test(text)) return 'cn';\n  if (/泰国|thailand|thai|\\bth\\b/i.test(text)) return 'th';\n  if (/巴基斯坦|pakistan|\\bpk\\b/i.test(text)) return 'pk';\n  if (/墨西哥|mexico|\\bmx\\b/i.test(text)) return 'mx';\n  return '';\n}\n\nfunction shellQuote(value) {\n  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;\n}\n\nfunction jsonEcho(value) {\n  return `printf '%s\\\\n' ${shellQuote(JSON.stringify(value))}`;\n}\n\nfunction buildSyncCommand(country) {\n  const repo = '/root/Global-Intelligent-Alarm-Repair-Assistant';\n  const repoUrl = 'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git';\n  const archiveUrl = 'https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant/archive/refs/heads/master.tar.gz';\n  if (country.sync === 'archive') {\n    return [\n      `echo '开始通过压缩包同步最新代码'`,\n      `tmp_dir=/tmp/global-intelligent-alarm-repair-assistant-master.$$`,\n      `archive_file=/tmp/global-intelligent-alarm-repair-assistant-master.tar.gz`,\n      `rm -rf \"$tmp_dir\"`,\n      `mkdir -p \"$tmp_dir\" ${shellQuote(repo)}`,\n      `curl -L --retry 3 --retry-delay 2 --connect-timeout 10 -o \"$archive_file\" ${shellQuote(archiveUrl)}`,\n      `tar -xzf \"$archive_file\" -C \"$tmp_dir\" --strip-components=1`,\n      `find ${shellQuote(repo)} -mindepth 1 -maxdepth 1 -exec rm -rf {} +`,\n      `cp -a \"$tmp_dir\"/. ${shellQuote(repo)}/`,\n      `rm -rf \"$tmp_dir\"`,\n      `echo '当前版本: archive/master'`,\n    ].join('; ');\n  }\n  return [\n    `if [ ! -d ${shellQuote(repo + '/.git')} ]; then rm -rf ${shellQuote(repo)}; git clone ${shellQuote(repoUrl)} ${shellQuote(repo)}; fi`,\n    `cd ${shellQuote(repo)}`,\n    `git remote set-url origin ${shellQuote(repoUrl)} || true`,\n    `git fetch origin master`,\n    `git reset --hard origin/master`,\n    `echo \"当前版本: $(git rev-parse --short HEAD)\"`,\n  ].join('; ');\n}\n\nfunction buildRemoteScript(country, payloadB64, dsToken, requestId) {\n  const repo = '/root/Global-Intelligent-Alarm-Repair-Assistant';\n  const logFile = `/tmp/${country.key}_ds_failed_auto_retry_${requestId}.log`;\n  const sync = buildSyncCommand(country);\n  return [\n    'set -e',\n    sync,\n    `cd ${shellQuote(repo)}`,\n    'set -a',\n    `[ -f ${shellQuote(country.legacyRepo + '/.env.local')} ] && source ${shellQuote(country.legacyRepo + '/.env.local')}`,\n    '[ -f .env.local ] && source .env.local',\n    'set +a',\n    `REQUEST_DS_TOKEN=${shellQuote(dsToken)}`,\n    `PAYLOAD_B64=${shellQuote(payloadB64)}`,\n    `REQUEST_ID=${shellQuote(requestId)}`,\n    `COUNTRY=${shellQuote(country.key)}`,\n    `nohup python3 tools/ds_failed_auto_retry.py --country \"$COUNTRY\" --payload-b64 \"$PAYLOAD_B64\" --ds-token \"$REQUEST_DS_TOKEN\" --request-id \"$REQUEST_ID\" >${shellQuote(logFile)} 2>&1 &`,\n    jsonEcho({ accepted: true, country: country.key, country_name: country.name, request_id: requestId, log: logFile }),\n  ].join('\\n');\n}\n\nconst countryKey = normalizeCountry(\n  inferCountryFromPayload(raw) ||\n  headers['x-country'] || headers['X-Country'] || ''\n);\nconst country = COUNTRIES[countryKey];\nconst requestId = String(raw.request_id || raw.requestId || `${countryKey || 'unknown'}-ds-alert-${Date.now()}`).replace(/[^a-zA-Z0-9_.-]/g, '_');\nconst dsToken =\n  findValue(raw, new Set(['ds_token', 'dstoken', 'token', 'dolphinscheduler_token'])) ||\n  String(headers['x-ds-token'] || headers['X-DS-Token'] || '').trim();\nconst payloadJson = JSON.stringify(raw);\nconst payloadB64 = Buffer.from(payloadJson, 'utf8').toString('base64');\n\nif (!country) {\n  return [{ json: {\n    accepted: false,\n    valid: false,\n    country: countryKey,\n    request_id: requestId,\n    command: jsonEcho({ accepted: false, valid: false, error: `unsupported country: ${countryKey || '(empty)'}`, request_id: requestId }),\n    message: '不支持的国家。country 支持 cn/th/ine/id/pk/mx/ph。'\n  }}];\n}\n\nconst remoteScript = buildRemoteScript(country, payloadB64, dsToken, requestId);\nconst command = `${country.ssh} ${shellQuote(remoteScript)}`;\n\nreturn [{ json: {\n  accepted: true,\n  valid: true,\n  country: country.key,\n  country_name: country.name,\n  request_id: requestId,\n  ds_token: dsToken,\n  payload_b64: payloadB64,\n  command,\n  note: '后台会先同步最新版代码，再调用 retry_instance，最多 3 次，从失败节点开始执行，每次检查间隔 3 分钟。'\n}}];"
+        "jsCode": "const incoming = $json.body ?? $json;\nconst headers = $json.headers || {};\n\n// DS 告警常将实际字段包在 message 的 JSON 字符串中（例如 \"[{...}]\"）。\n// 展开单个对象/单元素数组，让后续逻辑与重跑脚本直接获得 projectCode、workflowInstanceId 等字段。\nfunction unwrapAlertMessage(value) {\n  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;\n  const raw = { ...value };\n  if (typeof raw.message !== 'string' || !raw.message.trim()) return raw;\n  try {\n    const parsed = JSON.parse(raw.message);\n    const alert = Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : parsed;\n    if (alert && typeof alert === 'object' && !Array.isArray(alert)) {\n      return { ...raw, ...alert };\n    }\n  } catch (error) {\n    // 非 JSON 格式的普通 message 保持原样，继续沿用原有兼容逻辑。\n  }\n  return raw;\n}\n\nconst raw = unwrapAlertMessage(incoming);\n\nconst COUNTRIES = {\n  cn: { key: 'cn', name: '中国', ssh: 'ssh -p 36000 root@10.20.47.14', legacyRepo: '/root/CN-Intelligent-Alarm-Repair-Assistant', sync: 'archive' },\n  th: { key: 'th', name: '泰国', ssh: 'ssh -p 36000 root@192.168.20.236', legacyRepo: '/root/TH-Intelligent-Alarm-Repair-Assistant', sync: 'git' },\n  ine: { key: 'ine', name: '印尼', ssh: 'ssh -p 36000 root@192.168.21.236', legacyRepo: '/root/INE-Intelligent-Alarm-Repair-Assistant', sync: 'git' },\n  pk: { key: 'pk', name: '巴基斯坦', ssh: 'ssh root@10.20.84.176', legacyRepo: '/root/PK-Intelligent-Alarm-Repair-Assistant', sync: 'git' },\n  mx: { key: 'mx', name: '墨西哥', ssh: 'ssh -p 36000 root@172.20.220.165', legacyRepo: '/root/MX-Intelligent-Alarm-Repair-Assistant', sync: 'git' },\n  ph: { key: 'ph', name: '菲律宾', ssh: 'ssh root@10.20.10.12', legacyRepo: '/root/PH-Intelligent-Alarm-Repair-Assistant', sync: 'git' },\n};\n\nfunction findValue(value, names) {\n  if (!value || typeof value !== 'object') return '';\n  if (Array.isArray(value)) {\n    for (const item of value) {\n      const found = findValue(item, names);\n      if (found) return found;\n    }\n    return '';\n  }\n  for (const [key, item] of Object.entries(value)) {\n    if (names.has(String(key).toLowerCase()) && item !== undefined && item !== null && item !== '') {\n      return String(item).trim();\n    }\n    const found = findValue(item, names);\n    if (found) return found;\n  }\n  return '';\n}\n\nfunction normalizeCountry(value) {\n  const text = String(value || '').trim().toLowerCase();\n  if (['id', 'indonesia', '印尼'].includes(text)) return 'ine';\n  if (['cn', 'china', '中国'].includes(text)) return 'cn';\n  if (['th', 'thai', 'thailand', '泰国'].includes(text)) return 'th';\n  if (['pk', 'pakistan', '巴基斯坦'].includes(text)) return 'pk';\n  if (['mx', 'mexico', '墨西哥'].includes(text)) return 'mx';\n  if (['ph', 'philippines', '菲律宾'].includes(text)) return 'ph';\n  return text;\n}\n\nfunction inferCountryFromPayload(value) {\n  const explicit = findValue(value, new Set(['country', 'country_code', 'countrycode', 'app_country']));\n  if (explicit) return explicit;\n  const projectName = findValue(value, new Set(['project_name', 'projectname']));\n  const workflowName = findValue(value, new Set(['workflow_name', 'workflowname', 'workflow_instance_name', 'workflowinstancename', 'process_definition_name', 'processdefinitionname']));\n  const text = `${projectName} ${workflowName}`;\n  if (/菲律宾|philippines|\\bph\\b/i.test(text)) return 'ph';\n  if (/印尼|indonesia|\\bine\\b|\\bid\\b/i.test(text)) return 'ine';\n  if (/中国|china|\\bcn\\b/i.test(text)) return 'cn';\n  if (/泰国|thailand|thai|\\bth\\b/i.test(text)) return 'th';\n  if (/巴基斯坦|pakistan|\\bpk\\b/i.test(text)) return 'pk';\n  if (/墨西哥|mexico|\\bmx\\b/i.test(text)) return 'mx';\n  return '';\n}\n\nfunction shellQuote(value) {\n  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;\n}\n\nfunction jsonEcho(value) {\n  return `printf '%s\\\\n' ${shellQuote(JSON.stringify(value))}`;\n}\n\nfunction buildRemoteScript(country, payloadB64, dsToken, requestId, botId) {\n  const repo = '/root/Global-Intelligent-Alarm-Repair-Assistant';\n  const logDir = `${repo}/auto_repair_records/ds_failed_auto_retry_logs`;\n  const logFile = `${logDir}/${country.key}_ds_failed_auto_retry_${requestId}.log`;\n  return [\n    'set -e',\n    `cd ${shellQuote(repo)}`,\n    'set -a',\n    `[ -f ${shellQuote(country.legacyRepo + '/.env.local')} ] && source ${shellQuote(country.legacyRepo + '/.env.local')}`,\n    '[ -f .env.local ] && source .env.local',\n    'set +a',\n    `mkdir -p ${shellQuote(logDir)}`,\n    // 保留 9 份历史日志；本次新建后目录内最多为 10 份。\n    `find ${shellQuote(logDir)} -maxdepth 1 -type f -name '*_ds_failed_auto_retry_*.log' -print0 | xargs -0 -r ls -1t | tail -n +10 | xargs -r rm -f`,\n    `REQUEST_DS_TOKEN=${shellQuote(dsToken)}`,\n    `PAYLOAD_B64=${shellQuote(payloadB64)}`,\n    `REQUEST_ID=${shellQuote(requestId)}`,\n    `COUNTRY=${shellQuote(country.key)}`,\n    `REQUEST_BOT_ID=${shellQuote(botId)}`,\n    `if [ -n \"$REQUEST_BOT_ID\" ]; then export DS_FAILED_TV_BOT_ID_${country.key.toUpperCase()}=\"$REQUEST_BOT_ID\"; fi`,\n    `nohup python3 tools/ds_failed_auto_retry.py --country \"$COUNTRY\" --payload-b64 \"$PAYLOAD_B64\" --ds-token \"$REQUEST_DS_TOKEN\" --request-id \"$REQUEST_ID\" >${shellQuote(logFile)} 2>&1 &`,\n    jsonEcho({ accepted: true, country: country.key, country_name: country.name, request_id: requestId, log: logFile }),\n  ].join('\\n');\n}\n\nconst countryKey = normalizeCountry(\n  inferCountryFromPayload(raw) ||\n  headers['x-country'] || headers['X-Country'] || ''\n);\nconst country = COUNTRIES[countryKey];\nconst commandType = findValue(raw, new Set(['command_type', 'commandtype'])).toUpperCase();\nconst requestId = String(raw.request_id || raw.requestId || `${countryKey || 'unknown'}-ds-alert-${Date.now()}`).replace(/[^a-zA-Z0-9_.-]/g, '_');\nconst dsToken =\n  findValue(raw, new Set(['ds_token', 'dstoken', 'token', 'dolphinscheduler_token'])) ||\n  String(headers['x-ds-token'] || headers['X-DS-Token'] || '').trim();\n// 请求体顶层 bot_id 可选；为空或未提供时不覆盖各国既有默认机器人。\nconst botId = (typeof raw.bot_id === 'string' || typeof raw.bot_id === 'number')\n  ? String(raw.bot_id).trim()\n  : '';\nconst payloadJson = JSON.stringify(raw);\nconst payloadB64 = Buffer.from(payloadJson, 'utf8').toString('base64');\n\nif (!country) {\n  return [{ json: {\n    accepted: false,\n    valid: false,\n    country: countryKey,\n    request_id: requestId,\n    command: jsonEcho({ accepted: false, valid: false, error: `unsupported country: ${countryKey || '(empty)'}`, request_id: requestId }),\n    message: '不支持的国家。country 支持 cn/th/ine/id/pk/mx/ph。'\n  }}];\n}\n\n// 自动重跑触发的失败告警会再次进入 webhook；忽略它，避免并行启动多套重试循环。\nif (commandType === 'START_FAILURE_TASK_PROCESS') {\n  return [{ json: {\n    accepted: true,\n    valid: true,\n    ignored: true,\n    country: country.key,\n    country_name: country.name,\n    request_id: requestId,\n    command_type: commandType,\n    message: '已忽略自动重跑产生的失败告警，由原后台重试任务继续处理。'\n  }}];\n}\n\nconst remoteScript = buildRemoteScript(country, payloadB64, dsToken, requestId, botId);\nconst command = `${country.ssh} ${shellQuote(remoteScript)}`;\n\nreturn [{ json: {\n  accepted: true,\n  valid: true,\n  country: country.key,\n  country_name: country.name,\n  request_id: requestId,\n  ds_token: dsToken,\n  bot_id_overridden: Boolean(botId),\n  payload_b64: payloadB64,\n  command,\n  note: botId ? '已使用请求体 bot_id 覆盖当前国家的默认机器人；后台直接使用已部署版本调用 retry_instance，最多 3 次，从失败节点开始执行，单实例最多监控 30 分钟，同国活跃实例达到 10 个时熔断 30 分钟。' : '未提供 bot_id，使用当前国家默认机器人；后台直接使用已部署版本调用 retry_instance，最多 3 次，从失败节点开始执行，单实例最多监控 30 分钟，同国活跃实例达到 10 个时熔断 30 分钟。'\n}}];"
       },
-      "id": "0e4a95bb-6e67-462f-80e5-39935d687e93",
+      "id": "41475d22-bd3f-4888-881c-1268f22f3484",
       "name": "识别国家并构造命令",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        580,
-        260
+        15040,
+        -112
       ]
     },
     {
@@ -52,16 +182,17 @@
                   "caseSensitive": true,
                   "leftValue": "",
                   "typeValidation": "strict",
-                  "version": 3
+                  "version": 1
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{$json.country}}",
+                    "leftValue": "={{$json.ignored ? '' : $json.country}}",
                     "rightValue": "cn",
                     "operator": {
                       "type": "string",
                       "operation": "equals"
-                    }
+                    },
+                    "id": "44dc7f7b-4638-42e5-83d9-764658bf4acb"
                   }
                 ],
                 "combinator": "and"
@@ -73,16 +204,17 @@
                   "caseSensitive": true,
                   "leftValue": "",
                   "typeValidation": "strict",
-                  "version": 3
+                  "version": 1
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{$json.country}}",
+                    "leftValue": "={{$json.ignored ? '' : $json.country}}",
                     "rightValue": "ph",
                     "operator": {
                       "type": "string",
                       "operation": "equals"
-                    }
+                    },
+                    "id": "2290b2bd-2c6b-4fd3-8007-a0eda5455989"
                   }
                 ],
                 "combinator": "and"
@@ -94,16 +226,17 @@
                   "caseSensitive": true,
                   "leftValue": "",
                   "typeValidation": "strict",
-                  "version": 3
+                  "version": 1
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{$json.country}}",
+                    "leftValue": "={{$json.ignored ? '' : $json.country}}",
                     "rightValue": "ine",
                     "operator": {
                       "type": "string",
                       "operation": "equals"
-                    }
+                    },
+                    "id": "b1bd2b98-e263-4c10-bcd1-bc5fdb6c6078"
                   }
                 ],
                 "combinator": "and"
@@ -115,16 +248,17 @@
                   "caseSensitive": true,
                   "leftValue": "",
                   "typeValidation": "strict",
-                  "version": 3
+                  "version": 1
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{$json.country}}",
+                    "leftValue": "={{$json.ignored ? '' : $json.country}}",
                     "rightValue": "mx",
                     "operator": {
                       "type": "string",
                       "operation": "equals"
-                    }
+                    },
+                    "id": "12f1c6c8-a710-4794-8066-4bb16d16d206"
                   }
                 ],
                 "combinator": "and"
@@ -136,16 +270,17 @@
                   "caseSensitive": true,
                   "leftValue": "",
                   "typeValidation": "strict",
-                  "version": 3
+                  "version": 1
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{$json.country}}",
+                    "leftValue": "={{$json.ignored ? '' : $json.country}}",
                     "rightValue": "th",
                     "operator": {
                       "type": "string",
                       "operation": "equals"
-                    }
+                    },
+                    "id": "1b5ac8c6-006f-492f-9fdd-b286fc457cef"
                   }
                 ],
                 "combinator": "and"
@@ -157,16 +292,17 @@
                   "caseSensitive": true,
                   "leftValue": "",
                   "typeValidation": "strict",
-                  "version": 3
+                  "version": 1
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{$json.country}}",
+                    "leftValue": "={{$json.ignored ? '' : $json.country}}",
                     "rightValue": "pk",
                     "operator": {
                       "type": "string",
                       "operation": "equals"
-                    }
+                    },
+                    "id": "6895e3f0-3b11-45c2-b9d1-abde508d01a0"
                   }
                 ],
                 "combinator": "and"
@@ -174,15 +310,30 @@
             }
           ]
         },
-        "options": {}
+        "options": {
+          "fallbackOutput": "extra"
+        }
       },
-      "id": "f089cde0-ef9d-4090-b0f4-216d0d30583f",
+      "id": "e5da88c4-957f-4d0c-802c-2ee9ee8e13a5",
       "name": "按国家分流到跳板机",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3,
       "position": [
-        700,
-        260
+        15216,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { accepted: true, valid: true, ignored: true, country: $json.country || '', country_name: $json.country_name || '', request_id: $json.request_id || '', command_type: $json.command_type || '', background_started: false, message: $json.message || '已忽略自动重跑产生的失败告警。' } }];"
+      },
+      "id": "7076d3d1-0db6-4429-8d77-0f5f9bb4af81",
+      "name": "整理已忽略告警响应",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        15520,
+        480
       ]
     },
     {
@@ -190,13 +341,13 @@
         "authentication": "privateKey",
         "command": "={{$json.command}}"
       },
-      "id": "ds-failed-auto-rerun-cn",
+      "id": "93c2fead-6f88-4e1e-bd61-88cc3a960601",
       "name": "中国启动后台重跑",
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        860,
-        -180
+        15520,
+        -480
       ],
       "credentials": {
         "sshPrivateKey": {
@@ -210,13 +361,13 @@
         "authentication": "privateKey",
         "command": "={{$json.command}}"
       },
-      "id": "ds-failed-auto-rerun-ph",
+      "id": "884b3b54-20fa-4314-9111-8866b0c22140",
       "name": "菲律宾启动后台重跑",
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        860,
-        -60
+        15520,
+        -352
       ],
       "credentials": {
         "sshPrivateKey": {
@@ -230,13 +381,13 @@
         "authentication": "privateKey",
         "command": "={{$json.command}}"
       },
-      "id": "ds-failed-auto-rerun-ine",
+      "id": "0539ba90-63d9-49ba-8b65-aeb7e084cc9d",
       "name": "印尼启动后台重跑",
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        860,
-        60
+        15520,
+        -208
       ],
       "credentials": {
         "sshPrivateKey": {
@@ -250,13 +401,13 @@
         "authentication": "privateKey",
         "command": "={{$json.command}}"
       },
-      "id": "ds-failed-auto-rerun-mx",
+      "id": "98c45449-dd05-4576-8fea-1db31e593746",
       "name": "墨西哥启动后台重跑",
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        860,
-        180
+        15520,
+        -64
       ],
       "credentials": {
         "sshPrivateKey": {
@@ -270,13 +421,13 @@
         "authentication": "privateKey",
         "command": "={{$json.command}}"
       },
-      "id": "ds-failed-auto-rerun-th",
+      "id": "336d142d-c100-4d07-85b4-f3ae01fda0fa",
       "name": "泰国启动后台重跑",
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        860,
-        300
+        15520,
+        96
       ],
       "credentials": {
         "sshPrivateKey": {
@@ -290,13 +441,13 @@
         "authentication": "privateKey",
         "command": "={{$json.command}}"
       },
-      "id": "ds-failed-auto-rerun-pk",
+      "id": "0675c55b-0c83-4a4b-ab7a-948968965ebc",
       "name": "巴基斯坦启动后台重跑",
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        860,
-        420
+        15520,
+        288
       ],
       "credentials": {
         "sshPrivateKey": {
@@ -309,18 +460,193 @@
       "parameters": {
         "jsCode": "const stdout = String($json.stdout || '').trim();\nconst stderr = String($json.stderr || '').trim();\nlet started = null;\ntry {\n  started = stdout ? JSON.parse(stdout.split(/\\n/).filter(Boolean).at(-1)) : null;\n} catch (error) {\n  started = { raw_stdout: stdout, parse_error: error.message };\n}\n\nreturn [{\n  json: {\n    accepted: Boolean(started?.accepted),\n    country: started?.country || $json.country || '',\n    country_name: started?.country_name || $json.country_name || '',\n    request_id: started?.request_id || $json.request_id || '',\n    background_started: Boolean(started?.accepted),\n    runner: started,\n    stderr,\n    message: started?.accepted\n      ? `已接收 ${started.country_name || started.country || ''} DS 失败告警，后台自动重跑任务已启动。`\n      : (started?.error || 'DS 失败告警自动重跑未启动')\n  }\n}];"
       },
-      "id": "78065e74-1a3a-4c44-8457-70182d54a2f9",
+      "id": "9119c384-2781-4831-943e-8970333b354d",
       "name": "整理响应",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1140,
-        140
+        15920,
+        -112
       ]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@10.20.47.14 \"set -e; repo=/root/Global-Intelligent-Alarm-Repair-Assistant; tmp_dir=/tmp/global-intelligent-alarm-repair-assistant-main.\\$\\$; zip_file=/tmp/global-intelligent-alarm-repair-assistant-main.zip; rm -rf \\\"\\$tmp_dir\\\"; mkdir -p \\\"\\$tmp_dir\\\"; curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 -o \\\"\\$zip_file\\\" https://codeload.github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant/zip/refs/heads/master; python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \\\"\\$zip_file\\\" \\\"\\$tmp_dir\\\"; src_dir=\\$(find \\\"\\$tmp_dir\\\" -mindepth 1 -maxdepth 1 -type d -name 'Global-Intelligent-Alarm-Repair-Assistant-*' -print -quit); [ -n \\\"\\$src_dir\\\" ] || { echo 'archive has no source directory' >&2; exit 1; }; cd \\\"\\$repo\\\" || exit 1; find \\\"\\$repo\\\" -mindepth 1 -maxdepth 1 ! -name .git ! -name .env.local ! -name auto_repair_records ! -name cron_jobs -exec rm -rf {} +; cp -a \\\"\\$src_dir\\\"/. \\\"\\$repo\\\"/; rm -rf \\\"\\$tmp_dir\\\"; rm -f \\\"\\$zip_file\\\"; echo 'archive/master'\""
+      },
+      "id": "8c14d302-e45c-4523-ba0e-025d04ed94df",
+      "name": "中国更新自动重跑代码",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        14224,
+        -816
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "wGL20YUQ7ZpN1xRA",
+          "name": "中国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh root@10.20.10.12 \"cd /root/Global-Intelligent-Alarm-Repair-Assistant || exit 1; git fetch --prune origin '+refs/heads/master:refs/remotes/origin/master' || exit 1; git checkout master >/dev/null 2>&1 || git checkout -b master origin/master || exit 1; git reset --hard origin/master || exit 1; git rev-parse --short HEAD\""
+      },
+      "id": "51d9a793-6163-4948-9770-0bfbab2e6a88",
+      "name": "菲律宾更新自动重跑代码",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        14416,
+        -816
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "MQWXoKIQxg8ae2Nt",
+          "name": "菲律宾跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@192.168.21.236 \"cd /root/Global-Intelligent-Alarm-Repair-Assistant || exit 1; git fetch --prune origin '+refs/heads/master:refs/remotes/origin/master' || exit 1; git checkout master >/dev/null 2>&1 || git checkout -b master origin/master || exit 1; git reset --hard origin/master || exit 1; git rev-parse --short HEAD\""
+      },
+      "id": "b28f06f4-1d7f-470a-93e4-df55b1bdf57b",
+      "name": "印尼更新自动重跑代码",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        14608,
+        -816
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SyHW5nXUCnuULr2c",
+          "name": "印尼跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@172.20.220.165 \"cd /root/Global-Intelligent-Alarm-Repair-Assistant || exit 1; git fetch --prune origin '+refs/heads/master:refs/remotes/origin/master' || exit 1; git checkout master >/dev/null 2>&1 || git checkout -b master origin/master || exit 1; git reset --hard origin/master || exit 1; git rev-parse --short HEAD\""
+      },
+      "id": "e0c13db1-14e0-4a99-a0f7-17ef7b3620b8",
+      "name": "墨西哥更新自动重跑代码",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        14800,
+        -816
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "7oQDoS8H2buTjr7H",
+          "name": "墨西哥跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh -p 36000 root@192.168.20.236 \"cd /root/Global-Intelligent-Alarm-Repair-Assistant || exit 1; git fetch --prune origin '+refs/heads/master:refs/remotes/origin/master' || exit 1; git checkout master >/dev/null 2>&1 || git checkout -b master origin/master || exit 1; git reset --hard origin/master || exit 1; git rev-parse --short HEAD\""
+      },
+      "id": "9a2a82a8-18b5-4531-b286-c74755ae14e8",
+      "name": "泰国更新自动重跑代码",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        14992,
+        -816
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SliSXhrkW6tiEFFo",
+          "name": "泰国跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=ssh root@10.20.84.176 \"cd /root/Global-Intelligent-Alarm-Repair-Assistant || exit 1; git fetch --prune origin '+refs/heads/master:refs/remotes/origin/master' || exit 1; git checkout master >/dev/null 2>&1 || git checkout -b master origin/master || exit 1; git reset --hard origin/master || exit 1; git rev-parse --short HEAD\""
+      },
+      "id": "835f51c8-29c6-4a26-885f-8ac4a2a5ca26",
+      "name": "巴基斯坦更新自动重跑代码",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        15184,
+        -816
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "W8NbqcmBWoI5MZ3s",
+          "name": "巴基斯坦跳板机"
+        }
+      }
     }
   ],
   "pinData": {},
   "connections": {
+    "中国更新DS网关代码": {
+      "main": [
+        [
+          {
+            "node": "菲律宾更新DS网关代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "菲律宾更新DS网关代码": {
+      "main": [
+        [
+          {
+            "node": "印尼更新DS网关代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "印尼更新DS网关代码": {
+      "main": [
+        [
+          {
+            "node": "墨西哥更新DS网关代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "墨西哥更新DS网关代码": {
+      "main": [
+        [
+          {
+            "node": "泰国更新DS网关代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "泰国更新DS网关代码": {
+      "main": [
+        [
+          {
+            "node": "巴基斯坦更新DS网关代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "DS失败告警Webhook": {
       "main": [
         [
@@ -383,6 +709,13 @@
         [
           {
             "node": "巴基斯坦启动后台重跑",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "整理已忽略告警响应",
             "type": "main",
             "index": 0
           }
@@ -454,16 +787,84 @@
           }
         ]
       ]
+    },
+    "中国更新自动重跑代码": {
+      "main": [
+        [
+          {
+            "node": "菲律宾更新自动重跑代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "菲律宾更新自动重跑代码": {
+      "main": [
+        [
+          {
+            "node": "印尼更新自动重跑代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "印尼更新自动重跑代码": {
+      "main": [
+        [
+          {
+            "node": "墨西哥更新自动重跑代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "墨西哥更新自动重跑代码": {
+      "main": [
+        [
+          {
+            "node": "泰国更新自动重跑代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "泰国更新自动重跑代码": {
+      "main": [
+        [
+          {
+            "node": "巴基斯坦更新自动重跑代码",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "巴基斯坦更新自动重跑代码": {
+      "main": [
+        [
+          {
+            "node": "构造全部更新成功响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate"
   },
-  "versionId": "ds-failed-auto-rerun-all-countries-v2-jump-hosts",
+  "versionId": "c6f766bb-91cb-4755-8e22-6488bf85e59a",
   "meta": {
-    "templateCredsSetupCompleted": true
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9b8dca2625dfded9c94218816984fe8bf5bd91d03aaffc5e971fd46b2e9dc2e8"
   },
-  "id": "ds-failed-auto-rerun-all-countries",
+  "id": "iRNqvc9KzefbheCF",
   "tags": []
 }
