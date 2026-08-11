@@ -367,6 +367,138 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertIn("java.sql.SQLSyntaxErrorException: Unknown table dw.dwd_orders", messages[0])
         self.assertNotIn("run etl fail", messages[0])
 
+    def test_generic_retry_prefers_failed_task_log_and_reports_task_name(self):
+        """A process-level error must not prevent task lookup or hide the failed task name."""
+        calls = []
+        messages = []
+
+        def gateway(action, token, payload, request_id):
+            calls.append(action)
+            if action == "get_instance":
+                if request_id.endswith("-before"):
+                    return {
+                        "ok": True,
+                        "stdout": {
+                            "success": True,
+                            "data": {
+                                "state": "FAILURE",
+                                "errorMessage": "1064 (HY000): process-level wrapper error",
+                            },
+                        },
+                    }
+                return {"ok": True, "stdout": {"success": True, "data": {"state": "RUNNING_EXECUTION"}}}
+            if action == "list_task_instances":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {
+                            "data": {
+                                "totalList": [
+                                    {"id": 8899, "name": "dwd_pk_user_snapshot", "state": "FAILURE"}
+                                ]
+                            }
+                        },
+                    },
+                }
+            if action == "get_task_log":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {
+                            "log": "ERROR - Cannot cast column event_time from TIMESTAMP(0) to STRING NOT NULL"
+                        },
+                    },
+                }
+            if action == "retry_instance":
+                return {"ok": True, "stdout": {"success": True}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = generic_retry.auto_retry(
+                alert={
+                    "country": "pk",
+                    "project_code": "169585666733760",
+                    "instance_id": "2367606",
+                    "retry_key": "pk:169585666733760:2367606",
+                },
+                ds_token="token",
+                max_attempts=3,
+                retry_delay_seconds=0,
+                state_file=Path(tmp) / "state.json",
+                sleep=lambda _: None,
+                gateway_runner=gateway,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+            )
+
+        self.assertEqual(result["status"], "still_running")
+        self.assertIn("list_task_instances", calls)
+        self.assertIn("get_task_log", calls)
+        self.assertIn("原失败任务：dwd_pk_user_snapshot", messages[0])
+        self.assertIn("Cannot cast column event_time", messages[0])
+        self.assertNotIn("process-level wrapper error", messages[0])
+
+    def test_generic_retry_final_failure_keeps_cached_task_identity_and_reason(self):
+        """A later process wrapper must not replace the task-level failure context."""
+        task_list_calls = 0
+        messages = []
+
+        def gateway(action, token, payload, request_id):
+            nonlocal task_list_calls
+            if action == "get_instance":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {"state": "FAILURE", "errorMessage": "process-level wrapper error"},
+                    },
+                }
+            if action == "list_task_instances":
+                task_list_calls += 1
+                tasks = (
+                    [{"id": 8899, "name": "dwd_pk_user_snapshot", "state": "FAILURE"}]
+                    if task_list_calls == 1
+                    else []
+                )
+                return {
+                    "ok": True,
+                    "stdout": {"success": True, "data": {"data": {"totalList": tasks}}},
+                }
+            if action == "get_task_log":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {"log": "ERROR - task-level cast failure on event_time"},
+                    },
+                }
+            if action == "retry_instance":
+                return {"ok": True, "stdout": {"success": True}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = generic_retry.auto_retry(
+                alert={
+                    "country": "pk",
+                    "project_code": "169585666733760",
+                    "instance_id": "2367606",
+                    "retry_key": "pk:169585666733760:2367606",
+                },
+                ds_token="token",
+                max_attempts=1,
+                retry_delay_seconds=0,
+                state_file=Path(tmp) / "state.json",
+                sleep=lambda _: None,
+                gateway_runner=gateway,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+            )
+
+        self.assertEqual(result["status"], "failed_after_max_attempts")
+        self.assertIn("失败任务：dwd_pk_user_snapshot", messages[-1])
+        self.assertIn("task-level cast failure on event_time", messages[-1])
+        self.assertNotIn("process-level wrapper error", messages[-1])
+
     def test_generic_retry_max_attempt_summary_uses_concise_task_log_root_cause(self):
         messages = []
 
