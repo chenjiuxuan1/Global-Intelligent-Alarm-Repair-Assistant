@@ -240,6 +240,25 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
         self.assertIn("菲律宾", js_code)
         self.assertIn("inferCountryFromPayload(raw)", js_code)
 
+    def test_ds_failed_auto_rerun_enforces_retry_monitor_limits_for_every_country(self):
+        workflow = json.loads(DS_FAILED_AUTO_RERUN.read_text(encoding="utf-8"))
+        code_node = next(node for node in workflow["nodes"] if node["name"] == "识别国家并构造命令")
+        js_code = code_node["parameters"]["jsCode"]
+
+        expected_exports = {
+            "DS_FAILED_MAX_RETRIES": "3",
+            "DS_FAILED_INSTANCE_TIMEOUT_SECONDS": "1800",
+            "DS_FAILED_MONITOR_INTERVAL_SECONDS": "60",
+            "DS_FAILED_COUNTRY_ACTIVE_LIMIT": "10",
+            "DS_FAILED_COUNTRY_CIRCUIT_SECONDS": "1800",
+            "DS_FAILED_MONITOR_STALE_SECONDS": "300",
+        }
+        for name, value in expected_exports.items():
+            with self.subTest(name=name):
+                self.assertIn(f"export {name}={value}", js_code)
+
+        self.assertEqual(js_code.count("tools/ds_failed_auto_retry.py"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
