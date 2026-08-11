@@ -32,6 +32,7 @@ DEFAULT_TV_URL = "https://tv-service-alert.kuainiu.chat/alert"
 DEFAULT_TV_BOT_ID = "fccd2880-baea-42aa-9631-a74ac5d951eb"
 DEFAULT_TV_APP_ID = "alert"
 DEFAULT_COUNTRY = "ine"
+DEFAULT_TASK_LOG_LIMIT = 100_000
 COUNTRY_TV_DEFAULTS = {
     "ph": {
         "url": "https://tv-service-alert.kuainiu.chat/alert",
@@ -514,7 +515,11 @@ def _summarize_task_log(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    lines = [_strip_ds_log_prefix(line) for line in text.splitlines() if line.strip()]
+    # Some gateway/JSON wrappers return escaped newlines as literal ``\\n``.
+    if "\n" not in text and "\\n" in text:
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+    raw_lines = [line for line in text.splitlines() if line.strip()]
+    lines = [_strip_ds_log_prefix(line) for line in raw_lines]
     lines = [line for line in lines if line]
     if not lines:
         return ""
@@ -527,15 +532,31 @@ def _summarize_task_log(value: Any) -> str:
             if caused and not _is_failure_wrapper_reason(caused):
                 return caused
 
+    # Prefer text emitted at an explicit ERROR/FATAL log level.  Inspect the
+    # raw line because prefix stripping deliberately removes that level from
+    # task-internal log lines such as ``console - ERROR - Connection refused``.
+    for raw_line in reversed(raw_lines):
+        match = re.search(
+            r"(?:^|\s+-\s+|\[)(?:error|fatal)\]?\s*(?:[-:]\s*)?(.*)$",
+            raw_line,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            continue
+        cleaned = _strip_ds_log_prefix(raw_line)
+        explicit = match.group(1).strip()
+        candidate = cleaned if re.match(r"^(?:error|fatal)\b", cleaned, flags=re.IGNORECASE) else explicit
+        if candidate and not _is_failure_wrapper_reason(candidate):
+            return candidate[:1000]
+
     for line in reversed(lines):
-        if any(marker in line.lower() for marker in ("exception", "error", "failed", "失败")):
+        if re.search(r"\bexception\b|\bfailed\b|\berror\s*:|失败", line, flags=re.IGNORECASE):
             if _is_failure_wrapper_reason(line):
                 continue
             return line[:1000]
 
-    # Fall back to the last line, but never surface the generic ETL wrapper.
-    if not _is_failure_wrapper_reason(lines[-1]):
-        return lines[-1][:1000]
+    # No explicit error evidence means this may be a truncated SQL/script page.
+    # Returning its last line creates false reasons such as ``MAX(IF(...))``.
     return ""
 
 
@@ -614,6 +635,10 @@ def fetch_failure_info_from_task_log(
         "process_instance_id": alert["instance_id"],
         "page_size": 100,
     }
+    task_log_limit = max(
+        2001,
+        int(os.getenv("DS_FAILED_TASK_LOG_LIMIT", str(DEFAULT_TASK_LOG_LIMIT))),
+    )
     lookup_attempts = max(1, int(lookup_attempts))
     for lookup_index in range(lookup_attempts):
         task_list_response = gateway_runner(
@@ -632,7 +657,7 @@ def fetch_failure_info_from_task_log(
                     "task_instance_id": task_instance_id,
                     "task_name": task.get("name") or task.get("taskName") or "",
                     "task_code": task.get("taskCode") or "",
-                    "limit": 2000,
+                    "limit": task_log_limit,
                 },
                 f"{request_id}-task-{task_instance_id}-log-{lookup_index + 1}",
             )

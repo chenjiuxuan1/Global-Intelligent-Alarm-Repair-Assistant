@@ -88,7 +88,8 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(result["status"], "recovered")
         self.assertEqual(result["attempts"], 1)
         self.assertEqual([call[0] for call in calls], ["get_instance", "retry_instance", "get_instance"])
-        self.assertEqual(tv_messages, [])
+        self.assertEqual(len(tv_messages), 1)
+        self.assertIn("自动重跑已恢复成功，重跑次数：1", tv_messages[0])
 
     def test_auto_retry_sends_tv_after_three_failed_attempts(self):
         tv_messages = []
@@ -497,6 +498,59 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         reason = generic_retry._summarize_task_log(log_text)
         self.assertNotIn("INFO  -  ->", reason)
         self.assertIn("Connection refused", reason)
+
+    def test_summarize_does_not_treat_truncated_sql_tail_as_failure_reason(self):
+        """A log page ending inside SQL must not report its last SQL line as the error."""
+        log_text = (
+            "2026-08-11 11:04:00.000 INFO  -  -> SELECT\n"
+            "2026-08-11 11:04:00.001 INFO  -  -> user_id,\n"
+            "2026-08-11 11:04:00.002 INFO  -  -> MAX(IF(d0_amount > 0, 1, 0)) AS is_od_user,"
+        )
+
+        reason = generic_retry._summarize_task_log(log_text)
+
+        self.assertEqual(reason, "")
+
+    def test_summarize_does_not_treat_sql_error_identifier_as_log_level(self):
+        """The word error inside SQL is not an explicit ERROR log record."""
+        log_text = "SELECT error AS error_reason FROM task_result"
+
+        reason = generic_retry._summarize_task_log(log_text)
+
+        self.assertEqual(reason, "")
+
+    def test_failed_task_log_requests_enough_lines_to_reach_trailing_error(self):
+        """The fallback log/detail request must not stop at the first 2,000 SQL lines."""
+        seen_limits = []
+
+        def gateway(action, token, payload, request_id):
+            if action == "list_task_instances":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {"data": {"totalList": [{"id": 88, "name": "失败SQL", "state": "FAILURE"}]}},
+                    },
+                }
+            if action == "get_task_log":
+                seen_limits.append(payload["limit"])
+                if payload["limit"] <= 2000:
+                    log = "SELECT\nMAX(IF(d0_amount > 0, 1, 0)) AS is_od_user,"
+                else:
+                    log = "SELECT\nMAX(IF(d0_amount > 0, 1, 0)) AS is_od_user,\nERROR - Column d0_amount not found"
+                return {"ok": True, "stdout": {"success": True, "data": {"log": log}}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        reason, task_name = generic_retry.fetch_failure_info_from_task_log(
+            {"project_code": "15843450427744", "instance_id": "2321573"},
+            "token",
+            "ph-test",
+            gateway,
+        )
+
+        self.assertGreater(seen_limits[0], 2000)
+        self.assertEqual(reason, "ERROR - Column d0_amount not found")
+        self.assertEqual(task_name, "失败SQL")
 
     def test_extract_task_log_reason_filters_wrapper_only_log(self):
         """When the only error line is 'run etl fail', return empty (not the wrapper)."""
