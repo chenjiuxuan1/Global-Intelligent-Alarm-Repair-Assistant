@@ -69,7 +69,28 @@ class CountryMonitorRegistryTests(unittest.TestCase):
             self.assertTrue(blocked["circuit_open"])
             self.assertTrue(recovered["accepted"])
             self.assertFalse(recovered["circuit_open"])
-            self.assertFalse(recovered["alert_required"])
+
+    def test_expired_circuit_extends_without_duplicate_alert_when_count_stays_high(self):
+        clock = FakeClock()
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = CountryMonitorRegistry(
+                Path(tmp) / "pk.json",
+                active_limit=2,
+                circuit_seconds=1800,
+                stale_seconds=10_000,
+                clock=clock,
+                process_alive=lambda pid: True,
+            )
+            registry.register("pk:1:1", pid=1)
+            opened = registry.register("pk:1:2", pid=2)
+            first_open_until = opened["circuit_open_until"]
+
+            clock.advance(1801)
+            extended = registry.snapshot()
+
+            self.assertTrue(extended["circuit_open"])
+            self.assertFalse(extended["alert_required"])
+            self.assertGreater(extended["circuit_open_until"], first_open_until)
 
     def test_stale_heartbeat_is_removed_from_active_count(self):
         with tempfile.TemporaryDirectory() as tmp:

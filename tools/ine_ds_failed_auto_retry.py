@@ -15,7 +15,10 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
-from tools import ds_failed_auto_retry as shared
+try:
+    from tools import ds_failed_auto_retry as shared
+except ModuleNotFoundError:  # Support `python3 tools/ine_ds_failed_auto_retry.py`.
+    import ds_failed_auto_retry as shared
 
 
 ROOT = shared.ROOT
@@ -105,13 +108,24 @@ def main(argv: list[str] | None = None) -> int:
     alert = normalize_alert_payload(raw)
     ds_token = args.ds_token.strip() or alert.get("ds_token") or os.getenv("DS_TOKEN", "")
 
-    result = auto_retry(
-        alert=alert,
-        ds_token=ds_token,
-        max_attempts=args.max_attempts,
-        retry_delay_seconds=args.retry_delay_seconds,
-        state_file=Path(args.state_file),
-    )
+    state_file = Path(args.state_file)
+    with shared.retry_lock(state_file, alert["retry_key"]) as acquired:
+        if not acquired:
+            result = {
+                "success": True,
+                "status": "already_running",
+                "instance_id": alert["instance_id"],
+                "retry_key": alert["retry_key"],
+            }
+        else:
+            result = shared.run_registered_auto_retry(
+                alert=alert,
+                ds_token=ds_token,
+                max_attempts=args.max_attempts,
+                retry_delay_seconds=args.retry_delay_seconds,
+                state_file=state_file,
+                request_id=args.request_id,
+            )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0 if result.get("success") else 1
 

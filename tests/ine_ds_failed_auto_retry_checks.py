@@ -11,6 +11,16 @@ from tools import ds_failed_auto_retry as generic_retry
 
 
 class IneDsFailedAutoRetryChecks(unittest.TestCase):
+    class FakeClock:
+        def __init__(self):
+            self.value = 0.0
+
+        def monotonic(self):
+            return self.value
+
+        def sleep(self, seconds):
+            self.value += seconds
+
     class FakeRegistry:
         def __init__(self, register_decision, heartbeat_decisions=None):
             self.register_decision = register_decision
@@ -149,8 +159,8 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(result["attempts"], 3)
         self.assertEqual([seconds for seconds in sleeps if seconds == 180], [180, 180, 180])
         self.assertEqual(len(tv_messages), 1)
-        self.assertIn("目前自动失败重试中，执行次数：3", tv_messages[0])
-        self.assertIn("当前重试次数已达上限", tv_messages[0])
+        self.assertIn("自动重跑已完成 3 次且全部失败", tv_messages[0])
+        self.assertIn("当前状态：FAILURE", tv_messages[0])
         self.assertIn("INE-DWD", tv_messages[0])
 
     def test_payload_b64_cli_shape_is_json_decodable(self):
@@ -271,8 +281,8 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertIn('"workflowInstanceName":"菲律宾-数仓工作流（1D）-20260715122501017"', message)
         self.assertIn('"workflowHost":"10.20.10.12:5678"', message)
         self.assertIn("定时任务执行失败，失败原因：SQL执行失败", message)
-        self.assertIn("目前自动失败重试中，执行次数：3", message)
-        self.assertIn("当前重试次数已达上限，需要负责人查看处理@simontang@kn.group @jiangchuanchen@kn.group", message)
+        self.assertIn("自动重跑已完成 3 次且全部失败", message)
+        self.assertIn("当前状态：FAILURE，需要负责人查看@simontang@kn.group @jiangchuanchen@kn.group", message)
 
     def test_generic_retry_progress_message_keeps_raw_array_shape(self):
         alert = generic_retry.normalize_alert_payload(
@@ -437,7 +447,14 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
                 return {"ok": True, "stdout": {"success": True}}
             raise AssertionError(f"unexpected action: {action}")
 
-        with tempfile.TemporaryDirectory() as tmp:
+        clock = self.FakeClock()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {
+                "DS_FAILED_MONITOR_INTERVAL_SECONDS": "60",
+                "DS_FAILED_INSTANCE_TIMEOUT_SECONDS": "1800",
+            },
+        ):
             result = generic_retry.auto_retry(
                 alert={
                     "country": "pk",
@@ -449,17 +466,22 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
                 max_attempts=3,
                 retry_delay_seconds=0,
                 state_file=Path(tmp) / "state.json",
-                sleep=lambda _: None,
+                sleep=clock.sleep,
                 gateway_runner=gateway,
                 tv_sender=lambda message: messages.append(message) or {"success": True},
+                monotonic=clock.monotonic,
             )
 
-        self.assertEqual(result["status"], "still_running")
+        self.assertEqual(result["status"], "timeout_needs_owner")
         self.assertIn("list_task_instances", calls)
         self.assertIn("get_task_log", calls)
         self.assertIn("原失败任务：dwd_pk_user_snapshot", messages[0])
         self.assertIn("Cannot cast column event_time", messages[0])
         self.assertNotIn("process-level wrapper error", messages[0])
+        self.assertIn("失败任务：dwd_pk_user_snapshot", messages[-1])
+        self.assertIn("定时任务 30 分钟内未恢复", messages[-1])
+        self.assertIn("实际重跑次数：1", messages[-1])
+        self.assertIn("当前状态：RUNNING_EXECUTION", messages[-1])
 
     def test_generic_retry_final_failure_keeps_cached_task_identity_and_reason(self):
         """A later process wrapper must not replace the task-level failure context."""

@@ -373,6 +373,22 @@ def mark_max_attempts_notified(state_file: Path, retry_key: str) -> None:
     _write_json(state_file, state)
 
 
+def final_result_notified(state_file: Path, retry_key: str) -> bool:
+    return bool((_read_json(state_file).get(retry_key) or {}).get("final_result_notified"))
+
+
+def mark_final_result_notified(state_file: Path, retry_key: str, status: str) -> None:
+    state = _read_json(state_file)
+    item = state.get(retry_key) or {"attempts": 0}
+    state[retry_key] = {
+        **item,
+        "final_result_notified": True,
+        "final_status": str(status or ""),
+        "final_result_notified_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    _write_json(state_file, state)
+
+
 def _lock_path(state_file: Path, retry_key: str) -> Path:
     safe_key = re.sub(r"[^A-Za-z0-9_.-]+", "_", retry_key)
     return state_file.parent / f".{safe_key}.lock"
@@ -770,7 +786,7 @@ def build_failure_message(
 ) -> str:
     reason = failure_reason or extract_failure_reason(last_result)
     failed_task = str(task_name or alert.get("task_name") or "").strip()
-    tail = f"目前自动失败重试中，执行次数：{attempts}，当前重试次数已达上限，需要负责人查看处理"
+    tail = f"自动重跑已完成 {attempts} 次且全部失败，重跑次数：{attempts}，当前状态：{state}，需要负责人查看"
     mention_text = _mentions_text(mentions)
     if mention_text:
         tail = f"{tail}{mention_text}"
@@ -779,6 +795,32 @@ def build_failure_message(
             _alert_payload_text(alert),
             *([f"失败任务：{failed_task}"] if failed_task else []),
             f"定时任务执行失败，失败原因：{reason}",
+            tail,
+        ]
+    )
+
+
+def build_timeout_message(
+    alert: dict[str, Any],
+    attempts: int,
+    state: str,
+    reason: str,
+    mentions: str = "",
+    task_name: str = "",
+) -> str:
+    failed_task = str(task_name or alert.get("task_name") or "").strip()
+    tail = (
+        f"已停止自动重跑和监控，实际重跑次数：{attempts}，当前状态：{state}，"
+        "需要负责人查看"
+    )
+    mention_text = _mentions_text(mentions)
+    if mention_text:
+        tail = f"{tail}{mention_text}"
+    return "\n".join(
+        [
+            _alert_payload_text(alert),
+            *([f"失败任务：{failed_task}"] if failed_task else []),
+            f"定时任务 30 分钟内未恢复，失败原因：{reason or GENERIC_FAILURE_REASON}",
             tail,
         ]
     )
@@ -890,16 +932,21 @@ def auto_retry(
     gateway_runner: Callable[[str, str, dict[str, Any], str], dict[str, Any]] | None = None,
     tv_sender: Callable[[str], dict[str, Any]] | None = None,
     monitor_guard: Callable[[], dict[str, Any]] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
     reason_lookup_attempts = max(1, int(os.getenv("DS_FAILED_REASON_LOOKUP_ATTEMPTS", "3")))
     reason_lookup_delay_seconds = max(0, int(os.getenv("DS_FAILED_REASON_LOOKUP_DELAY_SECONDS", "5")))
-    monitor_interval_seconds = max(0, int(os.getenv("DS_FAILED_MONITOR_INTERVAL_SECONDS", "60")))
-    monitor_timeout_seconds = max(1, int(os.getenv("DS_FAILED_MONITOR_TIMEOUT_SECONDS", "86400")))
-    monitor_max_checks = max(
+    monitor_interval_seconds = max(1, int(os.getenv("DS_FAILED_MONITOR_INTERVAL_SECONDS", "60")))
+    instance_timeout_seconds = max(
         1,
-        monitor_timeout_seconds // max(monitor_interval_seconds, 1),
+        int(
+            os.getenv("DS_FAILED_INSTANCE_TIMEOUT_SECONDS")
+            or os.getenv("DS_FAILED_MONITOR_TIMEOUT_SECONDS")
+            or "1800"
+        ),
     )
+    deadline = monotonic() + instance_timeout_seconds
     gateway_runner = gateway_runner or (
         lambda action, token, payload, request_id: run_gateway_action(
             action,
@@ -966,19 +1013,69 @@ def auto_retry(
         )
         tv_result = tv_sender(message)
         mark_max_attempts_notified(state_file, retry_key)
+        mark_final_result_notified(state_file, retry_key, "max_attempts_reached")
         return {
             "success": False,
             "status": "max_attempts_reached",
             "attempts": initial_attempts,
             "tv_result": tv_result,
         }
+    if final_result_notified(state_file, retry_key):
+        return {
+            "success": True,
+            "status": "final_result_already_notified",
+            "attempts": initial_attempts,
+        }
 
     last_result: dict[str, Any] = {}
     progress_tv_result: dict[str, Any] = {}
     state = "UNKNOWN"
     attempts = initial_attempts
+    last_reason = failure_context(state_file, retry_key)["reason"]
+    last_task_name = failure_context(state_file, retry_key)["task_name"] or alert.get("task_name") or ""
+    last_mentions = failure_context(state_file, retry_key)["mentions"]
+
+    def timed_out() -> bool:
+        return monotonic() >= deadline
+
+    def sleep_with_deadline(seconds: int) -> bool:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return False
+        sleep(min(max(0, seconds), remaining))
+        return not timed_out()
+
+    def finish_timeout() -> dict[str, Any]:
+        cached = failure_context(state_file, retry_key)
+        reason = cached["reason"] or last_reason or extract_failure_reason(last_result)
+        task_name = cached["task_name"] or last_task_name or alert.get("task_name") or ""
+        mentions = cached["mentions"] or last_mentions or resolve_mentions(
+            alert.get("country") or DEFAULT_COUNTRY,
+            task_name,
+            tv_config["mentions"],
+        )
+        message = build_timeout_message(
+            alert,
+            attempts,
+            state,
+            reason,
+            mentions,
+            task_name,
+        )
+        tv_result = tv_sender(message)
+        mark_final_result_notified(state_file, retry_key, "timeout")
+        return {
+            "success": False,
+            "status": "timeout_needs_owner",
+            "attempts": attempts,
+            "state": state,
+            "progress_tv_result": progress_tv_result,
+            "tv_result": tv_result,
+        }
 
     while attempts < max_attempts:
+        if timed_out():
+            return finish_timeout()
         if monitor_guard is not None:
             monitor_decision = monitor_guard()
             if monitor_decision.get("circuit_open"):
@@ -1022,11 +1119,26 @@ def auto_retry(
             record_failure_context(state_file, retry_key, progress_reason, mentions, task_name)
         else:
             progress_reason = cached_context["reason"] or progress_reason
+        last_reason = progress_reason
+        last_task_name = task_name or last_task_name
+        last_mentions = mentions or last_mentions
         last_result = gateway_runner("retry_instance", ds_token, payload, request_id)
         if not last_result.get("ok"):
             state = "RETRY_ACTION_FAILED"
         else:
-            sleep(retry_delay_seconds)
+            state = "RETRY_SUBMITTED"
+            if not sleep_with_deadline(retry_delay_seconds):
+                return finish_timeout()
+            if monitor_guard is not None:
+                monitor_decision = monitor_guard()
+                if monitor_decision.get("circuit_open"):
+                    return {
+                        "success": True,
+                        "status": "country_circuit_open",
+                        "attempts": attempts,
+                        "state": state,
+                        "active_count": monitor_decision.get("active_count", 0),
+                    }
             check_result = gateway_runner("get_instance", ds_token, payload, f"{request_id}-check")
             last_result = check_result
             state = extract_instance_state(check_result)
@@ -1051,8 +1163,21 @@ def auto_retry(
             # alive after the first RUNNING state so a later SUCCESS can still
             # be reported instead of silently ending after the progress alert.
             monitor_checks = 0
-            while monitor_checks < monitor_max_checks:
-                sleep(monitor_interval_seconds)
+            while True:
+                if timed_out():
+                    return finish_timeout()
+                if monitor_guard is not None:
+                    monitor_decision = monitor_guard()
+                    if monitor_decision.get("circuit_open"):
+                        return {
+                            "success": True,
+                            "status": "country_circuit_open",
+                            "attempts": attempts,
+                            "state": state,
+                            "active_count": monitor_decision.get("active_count", 0),
+                        }
+                if not sleep_with_deadline(monitor_interval_seconds):
+                    return finish_timeout()
                 if monitor_guard is not None:
                     monitor_decision = monitor_guard()
                     if monitor_decision.get("circuit_open"):
@@ -1097,15 +1222,6 @@ def auto_retry(
                 # duplicate retry against the same process instance.
                 if state in TERMINAL_FAILURE_STATES:
                     break
-            else:
-                return {
-                    "success": True,
-                    "status": "still_running",
-                    "attempts": attempts,
-                    "state": state,
-                    "monitor_checks": monitor_checks,
-                    "tv_result": progress_tv_result,
-                }
 
     final_reason = extract_failure_reason(last_result)
     task_name = alert.get("task_name") or ""
@@ -1141,6 +1257,7 @@ def auto_retry(
     )
     tv_result = tv_sender(message)
     mark_max_attempts_notified(state_file, retry_key)
+    mark_final_result_notified(state_file, retry_key, "failed_after_max_attempts")
     return {
         "success": False,
         "status": "failed_after_max_attempts",
