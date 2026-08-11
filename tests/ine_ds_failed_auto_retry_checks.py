@@ -11,6 +11,28 @@ from tools import ds_failed_auto_retry as generic_retry
 
 
 class IneDsFailedAutoRetryChecks(unittest.TestCase):
+    class FakeRegistry:
+        def __init__(self, register_decision, heartbeat_decisions=None):
+            self.register_decision = register_decision
+            self.heartbeat_decisions = list(heartbeat_decisions or [])
+            self.registered = []
+            self.unregistered = []
+            self.heartbeats = []
+
+        def register(self, retry_key, *, pid, request_id="", instance_id=""):
+            self.registered.append((retry_key, pid, request_id, instance_id))
+            return dict(self.register_decision)
+
+        def heartbeat(self, retry_key, *, pid):
+            self.heartbeats.append((retry_key, pid))
+            if self.heartbeat_decisions:
+                return dict(self.heartbeat_decisions.pop(0))
+            return {"accepted": True, "circuit_open": False, "active_count": 1}
+
+        def unregister(self, retry_key, *, pid):
+            self.unregistered.append((retry_key, pid))
+            return {"accepted": True, "circuit_open": False, "active_count": 0}
+
     def test_normalize_alert_payload_accepts_nested_ds_fields(self):
         raw = {
             "body": {
@@ -669,6 +691,81 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         with mock.patch.object(generic_retry, "git_task_owner", return_value=""):
             self.assertEqual(generic_retry.resolve_mentions("mx", "任务", ""), "kuiwu@kn.group")
             self.assertEqual(generic_retry.resolve_mentions("cn", "任务", ""), "gretchenhe@kn.group")
+
+    def test_country_tenth_active_monitor_opens_circuit_and_alerts_once(self):
+        messages = []
+        runner_calls = []
+        registry = self.FakeRegistry(
+            {
+                "accepted": False,
+                "circuit_open": True,
+                "alert_required": True,
+                "active_count": 10,
+                "circuit_open_until": 2_000_000_000,
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = generic_retry.run_registered_auto_retry(
+                alert={
+                    "country": "pk",
+                    "project_code": "100",
+                    "instance_id": "200",
+                    "retry_key": "pk:100:200",
+                },
+                ds_token="token",
+                max_attempts=3,
+                retry_delay_seconds=0,
+                state_file=Path(tmp) / "state.json",
+                request_id="pk-alert-200",
+                registry=registry,
+                pid=123,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+                auto_retry_runner=lambda **kwargs: runner_calls.append(kwargs) or {"success": True},
+            )
+
+        self.assertEqual(result["status"], "country_circuit_open")
+        self.assertEqual(runner_calls, [])
+        self.assertEqual(len(messages), 1)
+        self.assertIn("巴基斯坦", messages[0])
+        self.assertIn("实例数已达到 10", messages[0])
+        self.assertIn("DolphinScheduler 当前状态不太健康", messages[0])
+        self.assertEqual(registry.unregistered, [("pk:100:200", 123)])
+
+    def test_registered_retry_stops_when_country_heartbeat_sees_circuit(self):
+        registry = self.FakeRegistry(
+            {"accepted": True, "circuit_open": False, "alert_required": False, "active_count": 1},
+            [{"accepted": False, "circuit_open": True, "active_count": 10}],
+        )
+        messages = []
+
+        def runner(**kwargs):
+            decision = kwargs["monitor_guard"]()
+            self.assertTrue(decision["circuit_open"])
+            return {"success": True, "status": "country_circuit_open"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = generic_retry.run_registered_auto_retry(
+                alert={
+                    "country": "ph",
+                    "project_code": "100",
+                    "instance_id": "200",
+                    "retry_key": "ph:100:200",
+                },
+                ds_token="token",
+                max_attempts=3,
+                retry_delay_seconds=0,
+                state_file=Path(tmp) / "state.json",
+                registry=registry,
+                pid=456,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+                auto_retry_runner=runner,
+            )
+
+        self.assertEqual(result["status"], "country_circuit_open")
+        self.assertEqual(messages, [])
+        self.assertEqual(registry.heartbeats, [("ph:100:200", 456)])
+        self.assertEqual(registry.unregistered, [("ph:100:200", 456)])
 
     def test_generic_retry_compacts_long_instance_error_message(self):
         long_reason = "\n".join(

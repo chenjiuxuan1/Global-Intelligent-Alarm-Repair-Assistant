@@ -25,6 +25,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+try:
+    from tools.ds_retry_monitor_registry import CountryMonitorRegistry
+except ModuleNotFoundError:  # Direct execution adds tools/, not the repository root, to sys.path.
+    from ds_retry_monitor_registry import CountryMonitorRegistry
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_GATEWAY_ENTRY = Path("/root/ds-scheduler-gateway/scripts/ds_scheduler_entry.py")
@@ -178,6 +183,10 @@ def get_country_tv_config(country: str) -> dict[str, str]:
 
 def default_state_file(country: str) -> Path:
     return ROOT / "auto_repair_records" / f"{normalize_country(country)}_ds_failed_retry_counts.json"
+
+
+def default_monitor_registry_file(country: str) -> Path:
+    return ROOT / "auto_repair_records" / f"{normalize_country(country)}_ds_active_retry_monitors.json"
 
 
 def normalize_alert_payload(raw: Any, country: str = DEFAULT_COUNTRY) -> dict[str, Any]:
@@ -819,6 +828,26 @@ def build_still_running_message(
     )
 
 
+def build_country_unhealthy_message(
+    country: str,
+    active_count: int,
+    circuit_open_until: float,
+    mentions: str = "",
+) -> str:
+    normalized = normalize_country(country)
+    country_name = COUNTRY_NAMES.get(normalized, normalized)
+    open_until = datetime.fromtimestamp(circuit_open_until).strftime("%Y-%m-%d %H:%M:%S")
+    tail = (
+        f"当前同时处于自动重跑/监控中的失败工作流实例数已达到 {active_count}，"
+        "已停止该国家全部自动重跑和监控。DolphinScheduler 当前状态不太健康，"
+        f"需要负责人查看；熔断保持 30 分钟，本次最早解除时间：{open_until}"
+    )
+    mention_text = _mentions_text(mentions)
+    if mention_text:
+        tail = f"{tail}{mention_text}"
+    return f"{country_name} {tail}"
+
+
 def build_failure_debug_message(alert: dict[str, Any], attempts: int, state: str, last_result: dict[str, Any]) -> str:
     country = normalize_country(alert.get("country") or DEFAULT_COUNTRY)
     country_name = COUNTRY_NAMES.get(country, country)
@@ -860,6 +889,7 @@ def auto_retry(
     sleep: Callable[[int], None] = time.sleep,
     gateway_runner: Callable[[str, str, dict[str, Any], str], dict[str, Any]] | None = None,
     tv_sender: Callable[[str], dict[str, Any]] | None = None,
+    monitor_guard: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
     reason_lookup_attempts = max(1, int(os.getenv("DS_FAILED_REASON_LOOKUP_ATTEMPTS", "3")))
@@ -949,6 +979,15 @@ def auto_retry(
     attempts = initial_attempts
 
     while attempts < max_attempts:
+        if monitor_guard is not None:
+            monitor_decision = monitor_guard()
+            if monitor_decision.get("circuit_open"):
+                return {
+                    "success": True,
+                    "status": "country_circuit_open",
+                    "attempts": attempts,
+                    "active_count": monitor_decision.get("active_count", 0),
+                }
         attempts = record_attempt(state_file, retry_key)
         country = normalize_country(alert.get("country") or DEFAULT_COUNTRY)
         request_id = f"{country}-ds-auto-retry-{alert['instance_id']}-{attempts}"
@@ -1014,6 +1053,16 @@ def auto_retry(
             monitor_checks = 0
             while monitor_checks < monitor_max_checks:
                 sleep(monitor_interval_seconds)
+                if monitor_guard is not None:
+                    monitor_decision = monitor_guard()
+                    if monitor_decision.get("circuit_open"):
+                        return {
+                            "success": True,
+                            "status": "country_circuit_open",
+                            "attempts": attempts,
+                            "state": state,
+                            "active_count": monitor_decision.get("active_count", 0),
+                        }
                 monitor_checks += 1
                 check_result = gateway_runner(
                     "get_instance",
@@ -1102,6 +1151,73 @@ def auto_retry(
     }
 
 
+def run_registered_auto_retry(
+    *,
+    alert: dict[str, Any],
+    ds_token: str,
+    max_attempts: int,
+    retry_delay_seconds: int,
+    state_file: Path,
+    request_id: str = "",
+    registry: CountryMonitorRegistry | None = None,
+    pid: int | None = None,
+    tv_sender: Callable[[str], dict[str, Any]] | None = None,
+    auto_retry_runner: Callable[..., dict[str, Any]] = auto_retry,
+) -> dict[str, Any]:
+    country = normalize_country(alert.get("country") or DEFAULT_COUNTRY)
+    tv_config = get_country_tv_config(country)
+    if tv_sender is None:
+        tv_sender = lambda message: send_tv_alert(
+            message,
+            tv_config["url"],
+            tv_config["bot_id"],
+            tv_config["app_id"],
+        )
+    registry = registry or CountryMonitorRegistry(
+        default_monitor_registry_file(country),
+        active_limit=int(os.getenv("DS_FAILED_COUNTRY_ACTIVE_LIMIT", "10")),
+        circuit_seconds=int(os.getenv("DS_FAILED_COUNTRY_CIRCUIT_SECONDS", "1800")),
+        stale_seconds=int(os.getenv("DS_FAILED_MONITOR_STALE_SECONDS", "300")),
+    )
+    monitor_pid = int(pid if pid is not None else os.getpid())
+    retry_key = alert["retry_key"]
+    decision = registry.register(
+        retry_key,
+        pid=monitor_pid,
+        request_id=request_id,
+        instance_id=str(alert.get("instance_id") or ""),
+    )
+    if decision.get("alert_required"):
+        tv_sender(
+            build_country_unhealthy_message(
+                country,
+                int(decision.get("active_count") or 0),
+                float(decision.get("circuit_open_until") or time.time()),
+                tv_config["mentions"],
+            )
+        )
+    if decision.get("circuit_open") or not decision.get("accepted"):
+        registry.unregister(retry_key, pid=monitor_pid)
+        return {
+            "success": True,
+            "status": "country_circuit_open",
+            "active_count": decision.get("active_count", 0),
+        }
+
+    try:
+        return auto_retry_runner(
+            alert=alert,
+            ds_token=ds_token,
+            max_attempts=max_attempts,
+            retry_delay_seconds=retry_delay_seconds,
+            state_file=state_file,
+            tv_sender=tv_sender,
+            monitor_guard=lambda: registry.heartbeat(retry_key, pid=monitor_pid),
+        )
+    finally:
+        registry.unregister(retry_key, pid=monitor_pid)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--country", default=os.getenv("APP_COUNTRY", DEFAULT_COUNTRY))
@@ -1129,12 +1245,13 @@ def main(argv: list[str] | None = None) -> int:
                 "retry_key": alert["retry_key"],
             }
         else:
-            result = auto_retry(
+            result = run_registered_auto_retry(
                 alert=alert,
                 ds_token=ds_token,
                 max_attempts=args.max_attempts,
                 retry_delay_seconds=args.retry_delay_seconds,
                 state_file=state_file,
+                request_id=args.request_id,
             )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0 if result.get("success") else 1
