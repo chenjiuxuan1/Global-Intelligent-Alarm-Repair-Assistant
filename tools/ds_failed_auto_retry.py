@@ -864,6 +864,12 @@ def auto_retry(
     tv_config = get_country_tv_config(alert.get("country") or DEFAULT_COUNTRY)
     reason_lookup_attempts = max(1, int(os.getenv("DS_FAILED_REASON_LOOKUP_ATTEMPTS", "3")))
     reason_lookup_delay_seconds = max(0, int(os.getenv("DS_FAILED_REASON_LOOKUP_DELAY_SECONDS", "5")))
+    monitor_interval_seconds = max(0, int(os.getenv("DS_FAILED_MONITOR_INTERVAL_SECONDS", "60")))
+    monitor_timeout_seconds = max(1, int(os.getenv("DS_FAILED_MONITOR_TIMEOUT_SECONDS", "86400")))
+    monitor_max_checks = max(
+        1,
+        monitor_timeout_seconds // max(monitor_interval_seconds, 1),
+    )
     gateway_runner = gateway_runner or (
         lambda action, token, payload, request_id: run_gateway_action(
             action,
@@ -1000,8 +1006,57 @@ def auto_retry(
             running_message = build_still_running_message(
                 alert, attempts, running_reason, mentions, task_name=task_name
             )
-            running_tv_result = tv_sender(running_message)
-            return {"success": True, "status": "still_running", "attempts": attempts, "state": state, "tv_result": running_tv_result}
+            progress_tv_result = tv_sender(running_message)
+
+            # The retry action is asynchronous. Keep this background process
+            # alive after the first RUNNING state so a later SUCCESS can still
+            # be reported instead of silently ending after the progress alert.
+            monitor_checks = 0
+            while monitor_checks < monitor_max_checks:
+                sleep(monitor_interval_seconds)
+                monitor_checks += 1
+                check_result = gateway_runner(
+                    "get_instance",
+                    ds_token,
+                    payload,
+                    f"{request_id}-monitor-{monitor_checks}",
+                )
+                last_result = check_result
+                state = extract_instance_state(check_result)
+
+                if state in SUCCESS_STATES:
+                    clear_attempts(state_file, retry_key)
+                    recovered_message = build_recovered_message(
+                        alert,
+                        attempts,
+                        running_reason,
+                        mentions,
+                        task_name=task_name,
+                    )
+                    recovered_tv_result = tv_sender(recovered_message)
+                    return {
+                        "success": True,
+                        "status": "recovered",
+                        "attempts": attempts,
+                        "state": state,
+                        "progress_tv_result": progress_tv_result,
+                        "tv_result": recovered_tv_result,
+                    }
+
+                # A transient UNKNOWN is a read failure, not evidence that the
+                # running retry ended. Keep monitoring to avoid launching a
+                # duplicate retry against the same process instance.
+                if state in TERMINAL_FAILURE_STATES:
+                    break
+            else:
+                return {
+                    "success": True,
+                    "status": "still_running",
+                    "attempts": attempts,
+                    "state": state,
+                    "monitor_checks": monitor_checks,
+                    "tv_result": progress_tv_result,
+                }
 
     final_reason = extract_failure_reason(last_result)
     task_name = alert.get("task_name") or ""

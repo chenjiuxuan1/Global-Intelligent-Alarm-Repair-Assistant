@@ -499,6 +499,85 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertIn("task-level cast failure on event_time", messages[-1])
         self.assertNotIn("process-level wrapper error", messages[-1])
 
+    def test_generic_retry_reports_success_after_running_retry_finishes(self):
+        """A retry that is initially running must stay monitored and later report recovery."""
+        messages = []
+        get_instance_calls = 0
+        retry_calls = 0
+
+        def gateway(action, token, payload, request_id):
+            nonlocal get_instance_calls, retry_calls
+            if action == "get_instance":
+                get_instance_calls += 1
+                states = ["FAILURE", "RUNNING_EXECUTION", "UNKNOWN", "SUCCESS"]
+                state = states[min(get_instance_calls - 1, len(states) - 1)]
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {
+                            "state": state,
+                            "errorMessage": "process-level wrapper error" if state == "FAILURE" else "",
+                        },
+                    },
+                }
+            if action == "list_task_instances":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {
+                            "data": {
+                                "totalList": [
+                                    {"id": 8899, "name": "dwd_pk_user_snapshot", "state": "FAILURE"}
+                                ]
+                            }
+                        },
+                    },
+                }
+            if action == "get_task_log":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {"log": "ERROR - task-level cast failure on event_time"},
+                    },
+                }
+            if action == "retry_instance":
+                retry_calls += 1
+                return {"ok": True, "stdout": {"success": True}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {
+                "DS_FAILED_MONITOR_INTERVAL_SECONDS": "0",
+                "DS_FAILED_MONITOR_TIMEOUT_SECONDS": "2",
+            },
+        ):
+            result = generic_retry.auto_retry(
+                alert={
+                    "country": "pk",
+                    "project_code": "169585666733760",
+                    "instance_id": "2367606",
+                    "retry_key": "pk:169585666733760:2367606",
+                },
+                ds_token="token",
+                max_attempts=3,
+                retry_delay_seconds=0,
+                state_file=Path(tmp) / "state.json",
+                sleep=lambda _: None,
+                gateway_runner=gateway,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+            )
+
+        self.assertEqual(result["status"], "recovered")
+        self.assertEqual(retry_calls, 1)
+        self.assertEqual(len(messages), 2)
+        self.assertIn("自动重跑后任务仍在运行中", messages[0])
+        self.assertIn("自动重跑已恢复成功", messages[1])
+        self.assertIn("原失败任务：dwd_pk_user_snapshot", messages[1])
+
     def test_generic_retry_max_attempt_summary_uses_concise_task_log_root_cause(self):
         messages = []
 
