@@ -303,27 +303,47 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+@contextmanager
+def _state_transaction(state_file: Path) -> Iterator[dict[str, Any]]:
+    """Serialize read-modify-write operations shared by country instances."""
+    lock_path = state_file.with_suffix(state_file.suffix + ".state.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        state = _read_json(state_file)
+        yield state
+        _write_json(state_file, state)
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
 
 
 def record_attempt(state_file: Path, retry_key: str) -> int:
-    state = _read_json(state_file)
-    item = state.get(retry_key) or {"attempts": 0}
-    attempts = int(item.get("attempts") or 0) + 1
-    state[retry_key] = {
-        **item,
-        "attempts": attempts,
-        "last_attempt_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    _write_json(state_file, state)
+    with _state_transaction(state_file) as state:
+        item = state.get(retry_key) or {"attempts": 0}
+        attempts = int(item.get("attempts") or 0) + 1
+        state[retry_key] = {
+            **item,
+            "attempts": attempts,
+            "last_attempt_at": datetime.now().isoformat(timespec="seconds"),
+        }
     return attempts
 
 
 def clear_attempts(state_file: Path, retry_key: str) -> None:
-    state = _read_json(state_file)
-    if retry_key in state:
-        del state[retry_key]
-        _write_json(state_file, state)
+    with _state_transaction(state_file) as state:
+        state.pop(retry_key, None)
 
 
 def current_attempts(state_file: Path, retry_key: str) -> int:
@@ -347,15 +367,14 @@ def record_failure_context(
     mentions: str,
     task_name: str = "",
 ) -> None:
-    state = _read_json(state_file)
-    item = state.get(retry_key) or {"attempts": 0}
-    state[retry_key] = {
-        **item,
-        "last_failure_reason": str(reason or "").strip(),
-        "mentions": str(mentions or "").strip(),
-        "failed_task_name": str(task_name or item.get("failed_task_name") or "").strip(),
-    }
-    _write_json(state_file, state)
+    with _state_transaction(state_file) as state:
+        item = state.get(retry_key) or {"attempts": 0}
+        state[retry_key] = {
+            **item,
+            "last_failure_reason": str(reason or "").strip(),
+            "mentions": str(mentions or "").strip(),
+            "failed_task_name": str(task_name or item.get("failed_task_name") or "").strip(),
+        }
 
 
 def max_attempts_notified(state_file: Path, retry_key: str) -> bool:
@@ -363,14 +382,13 @@ def max_attempts_notified(state_file: Path, retry_key: str) -> bool:
 
 
 def mark_max_attempts_notified(state_file: Path, retry_key: str) -> None:
-    state = _read_json(state_file)
-    item = state.get(retry_key) or {"attempts": 0}
-    state[retry_key] = {
-        **item,
-        "max_attempts_notified": True,
-        "max_attempts_notified_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    _write_json(state_file, state)
+    with _state_transaction(state_file) as state:
+        item = state.get(retry_key) or {"attempts": 0}
+        state[retry_key] = {
+            **item,
+            "max_attempts_notified": True,
+            "max_attempts_notified_at": datetime.now().isoformat(timespec="seconds"),
+        }
 
 
 def final_result_notified(state_file: Path, retry_key: str) -> bool:
@@ -378,15 +396,14 @@ def final_result_notified(state_file: Path, retry_key: str) -> bool:
 
 
 def mark_final_result_notified(state_file: Path, retry_key: str, status: str) -> None:
-    state = _read_json(state_file)
-    item = state.get(retry_key) or {"attempts": 0}
-    state[retry_key] = {
-        **item,
-        "final_result_notified": True,
-        "final_status": str(status or ""),
-        "final_result_notified_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    _write_json(state_file, state)
+    with _state_transaction(state_file) as state:
+        item = state.get(retry_key) or {"attempts": 0}
+        state[retry_key] = {
+            **item,
+            "final_result_notified": True,
+            "final_status": str(status or ""),
+            "final_result_notified_at": datetime.now().isoformat(timespec="seconds"),
+        }
 
 
 def _lock_path(state_file: Path, retry_key: str) -> Path:
@@ -441,7 +458,22 @@ def run_gateway_action(
         "--payload-b64",
         _payload_b64(payload),
     ]
-    completed = subprocess.run(cmd, text=True, capture_output=True, timeout=120, check=False)
+    try:
+        completed = subprocess.run(cmd, text=True, capture_output=True, timeout=120, check=False)
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "returncode": 124,
+            "stdout": {},
+            "stderr": f"gateway action {action} timed out after {exc.timeout} seconds",
+        }
+    except OSError as exc:
+        return {
+            "ok": False,
+            "returncode": 127,
+            "stdout": {},
+            "stderr": f"gateway action {action} could not start: {exc}",
+        }
     stdout = completed.stdout.strip()
     try:
         parsed = json.loads(stdout) if stdout else {}
@@ -678,6 +710,10 @@ def fetch_failure_info_from_task_log(
             "list_task_instances", ds_token, payload, f"{request_id}-tasks-{lookup_index + 1}"
         )
         failed_tasks = [task for task in _task_instances_from_response(task_list_response) if _is_failed_task(task)]
+        failed_tasks.sort(
+            key=lambda task: int(task.get("id") or task.get("taskInstanceId") or 0),
+            reverse=True,
+        )
         for task in failed_tasks:
             task_instance_id = task.get("id") or task.get("taskInstanceId")
             if not task_instance_id:
@@ -1073,6 +1109,85 @@ def auto_retry(
             "tv_result": tv_result,
         }
 
+    def finish_recovered(
+        reason: str,
+        mentions: str,
+        task_name: str,
+    ) -> dict[str, Any]:
+        clear_attempts(state_file, retry_key)
+        message = build_recovered_message(
+            alert,
+            attempts,
+            reason,
+            mentions,
+            task_name=task_name,
+        )
+        tv_result = tv_sender(message)
+        return {
+            "success": True,
+            "status": "recovered",
+            "attempts": attempts,
+            "state": state,
+            "progress_tv_result": progress_tv_result,
+            "tv_result": tv_result,
+        }
+
+    def monitor_current_instance(
+        payload: dict[str, Any],
+        request_id: str,
+        reason: str,
+        mentions: str,
+        task_name: str,
+    ) -> dict[str, Any] | None:
+        nonlocal last_result, progress_tv_result, state
+        progress_tv_result = tv_sender(
+            build_still_running_message(
+                alert,
+                attempts,
+                reason,
+                mentions,
+                task_name=task_name,
+            )
+        )
+        monitor_checks = 0
+        while True:
+            if timed_out():
+                return finish_timeout()
+            if monitor_guard is not None:
+                monitor_decision = monitor_guard()
+                if monitor_decision.get("circuit_open"):
+                    return {
+                        "success": True,
+                        "status": "country_circuit_open",
+                        "attempts": attempts,
+                        "state": state,
+                        "active_count": monitor_decision.get("active_count", 0),
+                    }
+            if not sleep_with_deadline(monitor_interval_seconds):
+                return finish_timeout()
+            if monitor_guard is not None:
+                monitor_decision = monitor_guard()
+                if monitor_decision.get("circuit_open"):
+                    return {
+                        "success": True,
+                        "status": "country_circuit_open",
+                        "attempts": attempts,
+                        "state": state,
+                        "active_count": monitor_decision.get("active_count", 0),
+                    }
+            monitor_checks += 1
+            last_result = gateway_runner(
+                "get_instance",
+                ds_token,
+                payload,
+                f"{request_id}-monitor-{monitor_checks}",
+            )
+            state = extract_instance_state(last_result)
+            if state in SUCCESS_STATES:
+                return finish_recovered(reason, mentions, task_name)
+            if state in TERMINAL_FAILURE_STATES:
+                return None
+
     while attempts < max_attempts:
         if timed_out():
             return finish_timeout()
@@ -1085,18 +1200,20 @@ def auto_retry(
                     "attempts": attempts,
                     "active_count": monitor_decision.get("active_count", 0),
                 }
-        attempts = record_attempt(state_file, retry_key)
         country = normalize_country(alert.get("country") or DEFAULT_COUNTRY)
-        request_id = f"{country}-ds-auto-retry-{alert['instance_id']}-{attempts}"
+        next_attempt = attempts + 1
+        request_id = f"{country}-ds-auto-retry-{alert['instance_id']}-{next_attempt}"
         payload = {
             "project_code": alert["project_code"],
             "instance_id": alert["instance_id"],
             "process_instance_id": alert["instance_id"],
         }
         pre_check_result = gateway_runner("get_instance", ds_token, payload, f"{request_id}-before")
+        last_result = pre_check_result
+        state = extract_instance_state(pre_check_result)
         progress_reason = extract_failure_reason(pre_check_result)
         task_name = alert.get("task_name") or ""
-        if extract_instance_state(pre_check_result) in TERMINAL_FAILURE_STATES:
+        if state in TERMINAL_FAILURE_STATES:
             fetched_reason, fetched_task_name = fetch_failure_info_from_task_log(
                 alert,
                 ds_token,
@@ -1122,6 +1239,25 @@ def auto_retry(
         last_reason = progress_reason
         last_task_name = task_name or last_task_name
         last_mentions = mentions or last_mentions
+
+        recovered_reason = (
+            progress_reason if progress_reason != GENERIC_FAILURE_REASON else cached_context["reason"]
+        )
+        if state in SUCCESS_STATES:
+            return finish_recovered(recovered_reason, mentions, task_name)
+
+        if state not in TERMINAL_FAILURE_STATES:
+            monitor_result = monitor_current_instance(
+                payload,
+                request_id,
+                recovered_reason,
+                mentions,
+                task_name,
+            )
+            if monitor_result is not None:
+                return monitor_result
+
+        attempts = record_attempt(state_file, retry_key)
         last_result = gateway_runner("retry_instance", ds_token, payload, request_id)
         if not last_result.get("ok"):
             state = "RETRY_ACTION_FAILED"
@@ -1144,84 +1280,18 @@ def auto_retry(
             state = extract_instance_state(check_result)
 
         if state in SUCCESS_STATES:
-            clear_attempts(state_file, retry_key)
-            recovered_reason = progress_reason if progress_reason != GENERIC_FAILURE_REASON else cached_context["reason"]
-            recovered_message = build_recovered_message(
-                alert, attempts, recovered_reason, mentions, task_name=task_name
+            return finish_recovered(recovered_reason, mentions, task_name)
+
+        if state not in TERMINAL_FAILURE_STATES and state != "RETRY_ACTION_FAILED":
+            monitor_result = monitor_current_instance(
+                payload,
+                request_id,
+                recovered_reason,
+                mentions,
+                task_name,
             )
-            recovered_tv_result = tv_sender(recovered_message)
-            return {"success": True, "status": "recovered", "attempts": attempts, "state": state, "tv_result": recovered_tv_result}
-
-        if state not in TERMINAL_FAILURE_STATES and state not in {"UNKNOWN", "RETRY_ACTION_FAILED"}:
-            running_reason = progress_reason if progress_reason != GENERIC_FAILURE_REASON else cached_context["reason"]
-            running_message = build_still_running_message(
-                alert, attempts, running_reason, mentions, task_name=task_name
-            )
-            progress_tv_result = tv_sender(running_message)
-
-            # The retry action is asynchronous. Keep this background process
-            # alive after the first RUNNING state so a later SUCCESS can still
-            # be reported instead of silently ending after the progress alert.
-            monitor_checks = 0
-            while True:
-                if timed_out():
-                    return finish_timeout()
-                if monitor_guard is not None:
-                    monitor_decision = monitor_guard()
-                    if monitor_decision.get("circuit_open"):
-                        return {
-                            "success": True,
-                            "status": "country_circuit_open",
-                            "attempts": attempts,
-                            "state": state,
-                            "active_count": monitor_decision.get("active_count", 0),
-                        }
-                if not sleep_with_deadline(monitor_interval_seconds):
-                    return finish_timeout()
-                if monitor_guard is not None:
-                    monitor_decision = monitor_guard()
-                    if monitor_decision.get("circuit_open"):
-                        return {
-                            "success": True,
-                            "status": "country_circuit_open",
-                            "attempts": attempts,
-                            "state": state,
-                            "active_count": monitor_decision.get("active_count", 0),
-                        }
-                monitor_checks += 1
-                check_result = gateway_runner(
-                    "get_instance",
-                    ds_token,
-                    payload,
-                    f"{request_id}-monitor-{monitor_checks}",
-                )
-                last_result = check_result
-                state = extract_instance_state(check_result)
-
-                if state in SUCCESS_STATES:
-                    clear_attempts(state_file, retry_key)
-                    recovered_message = build_recovered_message(
-                        alert,
-                        attempts,
-                        running_reason,
-                        mentions,
-                        task_name=task_name,
-                    )
-                    recovered_tv_result = tv_sender(recovered_message)
-                    return {
-                        "success": True,
-                        "status": "recovered",
-                        "attempts": attempts,
-                        "state": state,
-                        "progress_tv_result": progress_tv_result,
-                        "tv_result": recovered_tv_result,
-                    }
-
-                # A transient UNKNOWN is a read failure, not evidence that the
-                # running retry ended. Keep monitoring to avoid launching a
-                # duplicate retry against the same process instance.
-                if state in TERMINAL_FAILURE_STATES:
-                    break
+            if monitor_result is not None:
+                return monitor_result
 
     final_reason = extract_failure_reason(last_result)
     task_name = alert.get("task_name") or ""

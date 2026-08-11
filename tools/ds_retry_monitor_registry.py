@@ -113,8 +113,10 @@ class CountryMonitorRegistry:
             try:
                 alive = self.process_alive(pid)
             except Exception:
-                alive = not expired
-            if expired or not alive:
+                if expired:
+                    stale_keys.append(retry_key)
+                continue
+            if not alive:
                 stale_keys.append(retry_key)
         for retry_key in stale_keys:
             monitors.pop(retry_key, None)

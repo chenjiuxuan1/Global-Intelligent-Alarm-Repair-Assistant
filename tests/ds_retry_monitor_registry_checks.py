@@ -92,7 +92,7 @@ class CountryMonitorRegistryTests(unittest.TestCase):
             self.assertFalse(extended["alert_required"])
             self.assertGreater(extended["circuit_open_until"], first_open_until)
 
-    def test_stale_heartbeat_is_removed_from_active_count(self):
+    def test_stale_heartbeat_keeps_live_process_in_active_count(self):
         with tempfile.TemporaryDirectory() as tmp:
             clock = FakeClock()
             registry = self.make_registry(Path(tmp) / "pk.json", clock)
@@ -101,8 +101,27 @@ class CountryMonitorRegistryTests(unittest.TestCase):
             clock.advance(301)
             snapshot = registry.snapshot()
 
+            self.assertEqual(snapshot["active_count"], 1)
+            self.assertIn("pk:stale", snapshot["monitors"])
+
+    def test_stale_heartbeat_is_removed_when_process_liveness_is_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            clock = FakeClock()
+
+            def unknown_liveness(pid):
+                raise OSError("cannot inspect process")
+
+            registry = CountryMonitorRegistry(
+                Path(tmp) / "pk.json",
+                clock=clock,
+                process_alive=unknown_liveness,
+            )
+            registry.register("pk:stale", pid=101)
+
+            clock.advance(301)
+            snapshot = registry.snapshot()
+
             self.assertEqual(snapshot["active_count"], 0)
-            self.assertEqual(snapshot["monitors"], {})
 
     def test_dead_pid_is_removed_even_before_heartbeat_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:

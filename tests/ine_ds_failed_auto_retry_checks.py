@@ -1,6 +1,8 @@
 import base64
 import json
+import multiprocessing
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +10,11 @@ from unittest import mock
 
 from tools import ine_ds_failed_auto_retry as retry
 from tools import ds_failed_auto_retry as generic_retry
+
+
+def _record_attempt_worker(state_file, retry_key, start_event):
+    start_event.wait()
+    generic_retry.record_attempt(Path(state_file), retry_key)
 
 
 class IneDsFailedAutoRetryChecks(unittest.TestCase):
@@ -89,18 +96,27 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
     def test_auto_retry_recovers_after_first_retry(self):
         calls = []
         tv_messages = []
+        get_instance_calls = 0
 
         def gateway(action, token, payload, request_id):
+            nonlocal get_instance_calls
             calls.append((action, payload["instance_id"], request_id))
             if action == "get_instance":
-                return {"ok": True, "stdout": {"success": True, "data": {"state": "SUCCESS"}}}
+                get_instance_calls += 1
+                state = "FAILURE" if get_instance_calls == 1 else "SUCCESS"
+                return {"ok": True, "stdout": {"success": True, "data": {"state": state}}}
+            if action == "list_task_instances":
+                return {"ok": True, "stdout": {"data": {"data": {"totalList": []}}}}
             return {"ok": True, "stdout": {"success": True}}
 
         def tv_sender(message):
             tv_messages.append(message)
             return {"success": True, "status_code": 200}
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {"DS_FAILED_REASON_LOOKUP_ATTEMPTS": "1"},
+        ):
             result = retry.auto_retry(
                 alert={
                     "project_code": "100",
@@ -119,9 +135,167 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["status"], "recovered")
         self.assertEqual(result["attempts"], 1)
-        self.assertEqual([call[0] for call in calls], ["get_instance", "retry_instance", "get_instance"])
+        self.assertEqual(
+            [call[0] for call in calls],
+            ["get_instance", "list_task_instances", "retry_instance", "get_instance"],
+        )
         self.assertEqual(len(tv_messages), 1)
         self.assertIn("自动重跑已恢复成功，重跑次数：1", tv_messages[0])
+
+    def test_auto_retry_does_not_retry_when_precheck_is_already_success(self):
+        calls = []
+        messages = []
+
+        def gateway(action, token, payload, request_id):
+            calls.append(action)
+            if action == "get_instance":
+                return {"ok": True, "stdout": {"success": True, "data": {"state": "SUCCESS"}}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = generic_retry.auto_retry(
+                alert={
+                    "country": "ph",
+                    "project_code": "100",
+                    "instance_id": "200",
+                    "retry_key": "ph:100:200",
+                },
+                ds_token="token",
+                max_attempts=3,
+                retry_delay_seconds=0,
+                state_file=Path(tmp) / "state.json",
+                sleep=lambda _: None,
+                gateway_runner=gateway,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+            )
+
+        self.assertEqual(result["status"], "recovered")
+        self.assertEqual(result["attempts"], 0)
+        self.assertEqual(calls, ["get_instance"])
+        self.assertIn("重跑次数：0", messages[0])
+
+    def test_auto_retry_monitors_running_precheck_without_duplicate_retry(self):
+        clock = self.FakeClock()
+        messages = []
+        states = iter(["RUNNING_EXECUTION", "SUCCESS"])
+        retry_calls = 0
+
+        def gateway(action, token, payload, request_id):
+            nonlocal retry_calls
+            if action == "get_instance":
+                return {
+                    "ok": True,
+                    "stdout": {"success": True, "data": {"state": next(states)}},
+                }
+            if action == "retry_instance":
+                retry_calls += 1
+                return {"ok": True, "stdout": {"success": True}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {
+                "DS_FAILED_INSTANCE_TIMEOUT_SECONDS": "30",
+                "DS_FAILED_MONITOR_INTERVAL_SECONDS": "1",
+            },
+        ):
+            result = generic_retry.auto_retry(
+                alert={
+                    "country": "ph",
+                    "project_code": "100",
+                    "instance_id": "200",
+                    "retry_key": "ph:100:200",
+                },
+                ds_token="token",
+                max_attempts=3,
+                retry_delay_seconds=0,
+                state_file=Path(tmp) / "state.json",
+                sleep=clock.sleep,
+                gateway_runner=gateway,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+                monotonic=clock.monotonic,
+            )
+
+        self.assertEqual(result["status"], "recovered")
+        self.assertEqual(result["attempts"], 0)
+        self.assertEqual(retry_calls, 0)
+        self.assertIn("自动重跑后任务仍在运行中", messages[0])
+        self.assertIn("自动重跑已恢复成功", messages[-1])
+
+    def test_unknown_after_retry_is_monitored_without_duplicate_retry(self):
+        clock = self.FakeClock()
+        messages = []
+        retry_calls = 0
+        get_instance_calls = 0
+
+        def gateway(action, token, payload, request_id):
+            nonlocal retry_calls, get_instance_calls
+            if action == "retry_instance":
+                retry_calls += 1
+                return {"ok": True, "stdout": {"success": True}}
+            if action == "get_instance":
+                get_instance_calls += 1
+                states = ["FAILURE", "UNKNOWN", "RUNNING_EXECUTION", "SUCCESS"]
+                return {
+                    "ok": True,
+                    "stdout": {"success": True, "data": {"state": states[get_instance_calls - 1]}},
+                }
+            if action == "list_task_instances":
+                return {"ok": True, "stdout": {"data": {"data": {"totalList": []}}}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {
+                "DS_FAILED_INSTANCE_TIMEOUT_SECONDS": "30",
+                "DS_FAILED_MONITOR_INTERVAL_SECONDS": "1",
+                "DS_FAILED_REASON_LOOKUP_ATTEMPTS": "1",
+            },
+        ):
+            result = generic_retry.auto_retry(
+                alert={
+                    "country": "pk",
+                    "project_code": "100",
+                    "instance_id": "200",
+                    "retry_key": "pk:100:200",
+                },
+                ds_token="token",
+                max_attempts=3,
+                retry_delay_seconds=0,
+                state_file=Path(tmp) / "state.json",
+                sleep=clock.sleep,
+                gateway_runner=gateway,
+                tv_sender=lambda message: messages.append(message) or {"success": True},
+                monotonic=clock.monotonic,
+            )
+
+        self.assertEqual(result["status"], "recovered")
+        self.assertEqual(retry_calls, 1)
+        self.assertEqual(result["attempts"], 1)
+        self.assertIn("自动重跑已恢复成功", messages[-1])
+
+    def test_concurrent_instances_do_not_overwrite_retry_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            start_event = multiprocessing.Event()
+            processes = [
+                multiprocessing.Process(
+                    target=_record_attempt_worker,
+                    args=(str(state_file), f"ph:100:{index}", start_event),
+                )
+                for index in range(20)
+            ]
+            for process in processes:
+                process.start()
+            start_event.set()
+            for process in processes:
+                process.join(timeout=10)
+
+            state = generic_retry._read_json(state_file)
+
+        self.assertTrue(all(process.exitcode == 0 for process in processes))
+        self.assertEqual(len(state), 20)
+        self.assertTrue(all(item["attempts"] == 1 for item in state.values()))
 
     def test_auto_retry_sends_tv_after_three_failed_attempts(self):
         tv_messages = []
@@ -168,6 +342,23 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         encoded = base64.b64encode(json.dumps(raw).encode("utf-8")).decode("ascii")
 
         self.assertEqual(retry._decode_payload(encoded), raw)
+
+    def test_gateway_timeout_returns_failed_result_instead_of_crashing_monitor(self):
+        with mock.patch.object(
+            generic_retry.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(cmd=["gateway"], timeout=120),
+        ):
+            result = generic_retry.run_gateway_action(
+                "get_instance",
+                "token",
+                {"project_code": "100", "instance_id": "200"},
+                "pk-timeout",
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["returncode"], 124)
+        self.assertIn("timed out", result["stderr"].lower())
 
     def test_generic_retry_uses_requested_country_in_alert_and_gateway(self):
         raw = {"project_code": "100", "instance_id": "200"}
@@ -881,6 +1072,39 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertGreater(seen_limits[0], 2000)
         self.assertEqual(reason, "ERROR - Column d0_amount not found")
         self.assertEqual(task_name, "失败SQL")
+
+    def test_failed_task_lookup_prefers_latest_failed_task_instance(self):
+        def gateway(action, token, payload, request_id):
+            if action == "list_task_instances":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "data": {
+                            "data": {
+                                "totalList": [
+                                    {"id": 100, "name": "旧失败任务", "state": "FAILURE"},
+                                    {"id": 200, "name": "最新失败任务", "state": "FAILURE"},
+                                ]
+                            }
+                        }
+                    },
+                }
+            if action == "get_task_log":
+                return {
+                    "ok": True,
+                    "stdout": {"data": {"log": f"ERROR - task instance {payload['task_instance_id']} failed"}},
+                }
+            raise AssertionError(f"unexpected action: {action}")
+
+        reason, task_name = generic_retry.fetch_failure_info_from_task_log(
+            {"project_code": "100", "instance_id": "200"},
+            "token",
+            "pk-latest-task",
+            gateway,
+        )
+
+        self.assertEqual(task_name, "最新失败任务")
+        self.assertIn("task instance 200 failed", reason)
 
     def test_extract_task_log_reason_filters_wrapper_only_log(self):
         """When the only error line is 'run etl fail', return empty (not the wrapper)."""
