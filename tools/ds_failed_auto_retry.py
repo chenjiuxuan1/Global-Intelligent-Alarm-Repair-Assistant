@@ -59,7 +59,7 @@ COUNTRY_NAMES = {
 SUCCESS_STATES = {"SUCCESS"}
 TERMINAL_FAILURE_STATES = {"FAILURE", "FAILED", "STOP", "KILL", "KILLING", "6"}
 GENERIC_FAILURE_REASON = "未从 DS 实例详情中解析到明确失败原因，请查看 DS 实例日志"
-FAILED_TASK_STATES = {"FAILURE", "FAILED", "STOP", "KILL", "KILLING", "ERROR", "6"}
+FAILED_TASK_STATES = {"FAILURE", "FAILED", "STOP", "STOPPED", "KILL", "KILLING", "ERROR", "5", "6", "7", "9", "失败", "停止"}
 COUNTRY_FALLBACK_MENTIONS = {
     "cn": "gretchenhe@kn.group",
     "ine": "gretchenhe@kn.group",
@@ -68,6 +68,12 @@ COUNTRY_FALLBACK_MENTIONS = {
     "pk": "adamyu@kn.group",
     "th": "qilonghuang@kn.group",
 }
+
+
+def _debug(msg: str) -> None:
+    """Write diagnostic info to stderr so it appears in the nohup log file."""
+    ts = datetime.now().isoformat(timespec="seconds")
+    print(f"[ds-auto-retry] {ts} {msg}", file=sys.stderr, flush=True)
 
 
 def _is_failure_wrapper_reason(reason: str) -> bool:
@@ -560,14 +566,15 @@ def _task_instances_from_response(response: dict[str, Any]) -> list[dict[str, An
 
 
 def _is_failed_task(task: dict[str, Any]) -> bool:
-    state = str(
-        task.get("stateDesc")
-        or task.get("state")
-        or task.get("executionStatus")
-        or task.get("status")
-        or ""
-    ).strip().upper()
-    return state in FAILED_TASK_STATES
+    # Check each state field independently. DS may localise stateDesc
+    # (e.g. "失败") which masks the numeric state code (6) in an ``or`` chain.
+    for field in ("stateDesc", "state", "executionStatus", "status"):
+        value = str(task.get(field) or "").strip()
+        if not value:
+            continue
+        if value.upper() in FAILED_TASK_STATES or value in FAILED_TASK_STATES:
+            return True
+    return False
 
 
 def _summarize_task_log(value: Any) -> str:
@@ -709,7 +716,17 @@ def fetch_failure_info_from_task_log(
         task_list_response = gateway_runner(
             "list_task_instances", ds_token, payload, f"{request_id}-tasks-{lookup_index + 1}"
         )
-        failed_tasks = [task for task in _task_instances_from_response(task_list_response) if _is_failed_task(task)]
+        all_tasks = _task_instances_from_response(task_list_response)
+        failed_tasks = [task for task in all_tasks if _is_failed_task(task)]
+        if not failed_tasks:
+            task_states = [str(t.get("stateDesc") or t.get("state") or "?") for t in all_tasks]
+            _stdout = task_list_response.get("stdout") or {}
+            _debug(
+                f"reason-lookup[{lookup_index + 1}/{lookup_attempts}]: no failed tasks; "
+                f"total={len(all_tasks)} states={task_states} "
+                f"ok={task_list_response.get('ok')} success={_stdout.get('success')} "
+                f"error={str(_stdout.get('error'))[:300]}"
+            )
         failed_tasks.sort(
             key=lambda task: int(task.get("id") or task.get("taskInstanceId") or 0),
             reverse=True,
@@ -731,10 +748,18 @@ def fetch_failure_info_from_task_log(
                 f"{request_id}-task-{task_instance_id}-log-{lookup_index + 1}",
             )
             reason = extract_task_log_failure_reason(log_response)
+            if not reason:
+                _lstdout = log_response.get("stdout") or {}
+                _debug(
+                    f"reason-lookup: task {task_instance_id} ({task.get('name')}) no reason; "
+                    f"ok={log_response.get('ok')} success={_lstdout.get('success')} "
+                    f"error={str(_lstdout.get('error'))[:300]}"
+                )
             if reason:
                 return reason, str(task.get("name") or task.get("taskName") or "").strip()
         if lookup_index + 1 < lookup_attempts and lookup_delay_seconds > 0:
             sleep(lookup_delay_seconds)
+    _debug(f"reason-lookup: exhausted {lookup_attempts} attempt(s), no reason for instance {alert['instance_id']}")
     return "", ""
 
 
