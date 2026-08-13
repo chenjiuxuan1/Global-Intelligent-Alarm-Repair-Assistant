@@ -1956,14 +1956,50 @@ def get_candidate_workflow_code_files(task):
     return candidates
 
 
+def get_task_sql_from_ds_definition(task):
+    """从 DS 工作流定义中提取目标任务的实际执行脚本（本地 workflow 代码缺失时的回退）。"""
+    workflow_code = task.get('workflow_code')
+    task_code = str(task.get('task_code') or '')
+    if not workflow_code or not task_code:
+        return None
+    success, detail, _ = get_workflow_definition_detail(workflow_code)
+    if not success:
+        return None
+    for ds_task in detail.get('taskDefinitionList', []):
+        if str(ds_task.get('code')) != task_code:
+            continue
+        task_params = normalize_task_params(ds_task)
+        for field in ('sql', 'rawScript', 'raw_script', 'script', 'executeScript'):
+            value = task_params.get(field)
+            if isinstance(value, str) and value.strip():
+                return value
+        raw_params = ds_task.get('taskParams', '')
+        if isinstance(raw_params, str) and raw_params.strip():
+            return raw_params
+        if isinstance(raw_params, dict):
+            return json.dumps(raw_params, ensure_ascii=False)
+    return None
+
+
 def redundant_data_task_has_safe_rerun_code(task):
-    """冗余数据场景只有存在 delete/insert overwrite 逻辑时才允许自动重跑。"""
+    """冗余数据场景只有存在 delete/insert overwrite 逻辑时才允许自动重跑。
+
+    优先检查本地 workflow 代码目录；本地代码不可用或未命中时，
+    回退到 DS 工作流定义中的任务脚本，避免因代码仓库未同步而误判。
+    """
     for path, content in get_candidate_workflow_code_files(task):
         if not file_mentions_table(content, task.get('table', '')):
             continue
         if has_overwrite_or_delete_statement(content, task.get('table', '')):
             task['redundant_safe_rerun_evidence'] = path
             return True
+
+    ds_sql = get_task_sql_from_ds_definition(task)
+    if ds_sql and has_overwrite_or_delete_statement(ds_sql, task.get('table', '')):
+        workflow_code = task.get('workflow_code', '')
+        task_code = task.get('task_code', '')
+        task['redundant_safe_rerun_evidence'] = f"ds://{workflow_code}/{task_code}"
+        return True
     return False
 
 

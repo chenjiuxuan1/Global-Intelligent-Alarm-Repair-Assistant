@@ -2215,6 +2215,91 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(manual_review[0]["status"], "skipped_manual_review")
         self.assertIn("未发现 delete 或 insert overwrite", manual_review[0]["error"])
 
+    def test_apply_repair_strategy_falls_back_to_ds_sql_when_local_workflow_code_missing(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            # 本地 workflow 代码目录为空/缺失，模拟线上代码仓库未同步的场景
+            module.WORKFLOW_CODE_ROOT = tmp
+            module.WORKFLOW_CODE_COUNTRY = "pk"
+            detail = {
+                "taskDefinitionList": [
+                    {
+                        "code": "170184710628033",
+                        "taskParams": {
+                            "sql": (
+                                "set @v_start_dt = DATE_SUB('${F_LAST_UPDATE_TIME}', INTERVAL 30 MINUTE);\n"
+                                "delete from dwd.dwd_app_referral_record "
+                                "WHERE referral_record_update_at >= @v_start_dt;\n"
+                                "INSERT INTO dwd.dwd_app_referral_record (...) "
+                                "SELECT ... FROM hive.ods.ods_pak_referral_record "
+                                "WHERE referral_record_update_at >= @v_start_dt;"
+                            ),
+                            "sqlType": "1",
+                        },
+                    }
+                ]
+            }
+            tasks = [
+                {
+                    "table": "dwd_app_referral_record",
+                    "dt": "2026-08-13",
+                    "diff": -11,
+                    "workflow_code": "170184710628032",
+                    "task_code": "170184710628033",
+                }
+            ]
+
+            with mock.patch.object(
+                module, "get_workflow_definition_detail", return_value=(True, detail, "")
+            ) as mock_detail:
+                runnable, manual_review = module.apply_repair_strategy(tasks, {})
+
+        self.assertEqual([item["table"] for item in runnable], ["dwd_app_referral_record"])
+        self.assertEqual(manual_review, [])
+        self.assertTrue(mock_detail.called)
+        self.assertEqual(
+            runnable[0]["redundant_safe_rerun_evidence"],
+            "ds://170184710628032/170184710628033",
+        )
+
+    def test_apply_repair_strategy_still_escalates_when_ds_sql_has_no_delete_or_overwrite(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            module.WORKFLOW_CODE_ROOT = tmp
+            module.WORKFLOW_CODE_COUNTRY = "pk"
+            detail = {
+                "taskDefinitionList": [
+                    {
+                        "code": "170184710628033",
+                        "taskParams": {
+                            "sql": (
+                                "INSERT INTO dwd.dwd_app_referral_record (...) "
+                                "SELECT ... FROM hive.ods.ods_pak_referral_record;"
+                            ),
+                            "sqlType": "1",
+                        },
+                    }
+                ]
+            }
+            tasks = [
+                {
+                    "table": "dwd_app_referral_record",
+                    "dt": "2026-08-13",
+                    "diff": -11,
+                    "workflow_code": "170184710628032",
+                    "task_code": "170184710628033",
+                }
+            ]
+
+            with mock.patch.object(
+                module, "get_workflow_definition_detail", return_value=(True, detail, "")
+            ):
+                runnable, manual_review = module.apply_repair_strategy(tasks, {})
+
+        self.assertEqual(runnable, [])
+        self.assertEqual(len(manual_review), 1)
+        self.assertIn("未发现 delete 或 insert overwrite", manual_review[0]["error"])
+
     def test_apply_repair_strategy_always_allows_dwb_alert_regardless_of_negative_diff(self):
         module = load_module()
         task = {
