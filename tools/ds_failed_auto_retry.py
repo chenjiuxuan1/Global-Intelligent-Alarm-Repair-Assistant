@@ -635,11 +635,19 @@ def _summarize_task_log(value: Any) -> str:
 def extract_task_log_failure_reason(response: dict[str, Any]) -> str:
     """Read the actual log text returned by get_task_log, not API wrapper messages."""
     data = response.get("stdout", response)
+    log_keys_found: list[tuple[str, int]] = []
     for key, value in _walk_values(data):
         if str(key).lower() in {"log", "logcontent", "log_content", "content"}:
+            text_len = len(str(value or ""))
+            log_keys_found.append((key, text_len))
             summary = _summarize_task_log(value)
             if summary and not _is_failure_wrapper_reason(summary):
                 return summary
+    if log_keys_found:
+        _debug(f"extract_reason: log keys found {log_keys_found} but no reason extracted (log may be empty or lack error patterns)")
+    else:
+        top_keys = list(data.keys()) if isinstance(data, dict) else type(data).__name__
+        _debug(f"extract_reason: no log/content keys in response; top keys={top_keys}")
     return ""
 
 
