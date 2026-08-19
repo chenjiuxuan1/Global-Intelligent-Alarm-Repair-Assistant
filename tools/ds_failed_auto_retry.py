@@ -60,6 +60,38 @@ SUCCESS_STATES = {"SUCCESS"}
 TERMINAL_FAILURE_STATES = {"FAILURE", "FAILED", "STOP", "KILL", "KILLING", "6"}
 GENERIC_FAILURE_REASON = "未从 DS 实例详情中解析到明确失败原因，请查看 DS 实例日志"
 FAILED_TASK_STATES = {"FAILURE", "FAILED", "STOP", "STOPPED", "KILL", "KILLING", "ERROR", "5", "6", "7", "9", "失败", "停止"}
+
+# Real DB/worker failures are often logged without an ERROR/FATAL level or an
+# exception/failed keyword (e.g. ``Access denied``, ``killed by kill
+# statement``).  Match those so a root cause is still surfaced instead of the
+# generic "no reason" fallback.  Kept narrow so a truncated SQL page never
+# matches by accident.
+_DB_FAILURE_MARKERS = (
+    "access denied",
+    "permission denied",
+    "killed by kill",
+    "kill statement",
+    "kill query",
+    "does not exist",
+    "unknown column",
+    "unknown table",
+    "duplicate entry",
+    "duplicate key",
+    "deadlock",
+    "lock wait timeout",
+    "query timeout",
+    "sqlstate",
+    "connection reset",
+    "connection refused",
+    "lost connection",
+    "broken pipe",
+    "no space left",
+    "out of memory",
+)
+_DB_FAILURE_MARKER_RE = re.compile(
+    "|".join(re.escape(marker) for marker in _DB_FAILURE_MARKERS),
+    re.IGNORECASE,
+)
 COUNTRY_FALLBACK_MENTIONS = {
     "cn": "gretchenhe@kn.group",
     "ine": "gretchenhe@kn.group",
@@ -621,6 +653,15 @@ def _summarize_task_log(value: Any) -> str:
         if candidate and not _is_failure_wrapper_reason(candidate):
             return candidate[:1000]
 
+    # Some failures never carry an ERROR/FATAL level or an exception/failed
+    # keyword (e.g. ``killed by kill statement`` at INFO level).  Fall back to
+    # scanning for known DB/worker error markers before giving up.
+    for index in range(len(lines) - 1, -1, -1):
+        if _is_failure_wrapper_reason(lines[index]):
+            continue
+        if _DB_FAILURE_MARKER_RE.search(lines[index]):
+            return lines[index][:1000]
+
     for line in reversed(lines):
         if re.search(r"\bexception\b|\bfailed\b|\berror\s*:|失败", line, flags=re.IGNORECASE):
             if _is_failure_wrapper_reason(line):
@@ -641,6 +682,18 @@ def extract_task_log_failure_reason(response: dict[str, Any]) -> str:
             text_len = len(str(value or ""))
             log_keys_found.append((key, text_len))
             summary = _summarize_task_log(value)
+            if summary and not _is_failure_wrapper_reason(summary):
+                return summary
+    # Some DS versions return the raw log as the whole response (string body).
+    # _walk_values ignores strings, so try the body directly.
+    if isinstance(data, str):
+        summary = _summarize_task_log(data)
+        if summary and not _is_failure_wrapper_reason(summary):
+            return summary
+    if isinstance(data, dict):
+        body = data.get("data")
+        if isinstance(body, str):
+            summary = _summarize_task_log(body)
             if summary and not _is_failure_wrapper_reason(summary):
                 return summary
     if log_keys_found:
@@ -719,52 +772,65 @@ def fetch_failure_info_from_task_log(
         2001,
         int(os.getenv("DS_FAILED_TASK_LOG_LIMIT", str(DEFAULT_TASK_LOG_LIMIT))),
     )
+    max_pages = max(
+        1,
+        int(os.getenv("DS_FAILED_TASK_LOOKUP_PAGES", "5")),
+    )
     lookup_attempts = max(1, int(lookup_attempts))
     for lookup_index in range(lookup_attempts):
-        task_list_response = gateway_runner(
-            "list_task_instances", ds_token, payload, f"{request_id}-tasks-{lookup_index + 1}"
-        )
-        all_tasks = _task_instances_from_response(task_list_response)
-        failed_tasks = [task for task in all_tasks if _is_failed_task(task)]
-        if not failed_tasks:
-            task_states = [str(t.get("stateDesc") or t.get("state") or "?") for t in all_tasks]
-            _stdout = task_list_response.get("stdout") or {}
-            _debug(
-                f"reason-lookup[{lookup_index + 1}/{lookup_attempts}]: no failed tasks; "
-                f"total={len(all_tasks)} states={task_states} "
-                f"ok={task_list_response.get('ok')} success={_stdout.get('success')} "
-                f"error={str(_stdout.get('error'))[:300]}"
-            )
-        failed_tasks.sort(
-            key=lambda task: int(task.get("id") or task.get("taskInstanceId") or 0),
-            reverse=True,
-        )
-        for task in failed_tasks:
-            task_instance_id = task.get("id") or task.get("taskInstanceId")
-            if not task_instance_id:
-                continue
-            log_response = gateway_runner(
-                "get_task_log",
+        # Large workflows can put the failed task beyond the first page.  Read
+        # the list page by page and stop as soon as a page is empty.
+        for page in range(1, max_pages + 1):
+            task_list_response = gateway_runner(
+                "list_task_instances",
                 ds_token,
-                {
-                    **payload,
-                    "task_instance_id": task_instance_id,
-                    "task_name": task.get("name") or task.get("taskName") or "",
-                    "task_code": task.get("taskCode") or "",
-                    "limit": task_log_limit,
-                },
-                f"{request_id}-task-{task_instance_id}-log-{lookup_index + 1}",
+                {**payload, "page_no": page},
+                f"{request_id}-tasks-{lookup_index + 1}-p{page}",
             )
-            reason = extract_task_log_failure_reason(log_response)
-            if not reason:
-                _lstdout = log_response.get("stdout") or {}
+            all_tasks = _task_instances_from_response(task_list_response)
+            if not all_tasks:
+                break
+            failed_tasks = [task for task in all_tasks if _is_failed_task(task)]
+            if not failed_tasks:
+                task_states = [str(t.get("stateDesc") or t.get("state") or "?") for t in all_tasks]
+                _stdout = task_list_response.get("stdout") or {}
                 _debug(
-                    f"reason-lookup: task {task_instance_id} ({task.get('name')}) no reason; "
-                    f"ok={log_response.get('ok')} success={_lstdout.get('success')} "
-                    f"error={str(_lstdout.get('error'))[:300]}"
+                    f"reason-lookup[{lookup_index + 1}/{lookup_attempts}] page {page}: "
+                    f"no failed tasks in page; page_tasks={len(all_tasks)} states={task_states} "
+                    f"ok={task_list_response.get('ok')} success={_stdout.get('success')} "
+                    f"error={str(_stdout.get('error'))[:300]}"
                 )
-            if reason:
-                return reason, str(task.get("name") or task.get("taskName") or "").strip()
+                continue
+            failed_tasks.sort(
+                key=lambda task: int(task.get("id") or task.get("taskInstanceId") or 0),
+                reverse=True,
+            )
+            for task in failed_tasks:
+                task_instance_id = task.get("id") or task.get("taskInstanceId")
+                if not task_instance_id:
+                    continue
+                log_response = gateway_runner(
+                    "get_task_log",
+                    ds_token,
+                    {
+                        **payload,
+                        "task_instance_id": task_instance_id,
+                        "task_name": task.get("name") or task.get("taskName") or "",
+                        "task_code": task.get("taskCode") or "",
+                        "limit": task_log_limit,
+                    },
+                    f"{request_id}-task-{task_instance_id}-log-{lookup_index + 1}",
+                )
+                reason = extract_task_log_failure_reason(log_response)
+                if not reason:
+                    _lstdout = log_response.get("stdout") or {}
+                    _debug(
+                        f"reason-lookup: task {task_instance_id} ({task.get('name')}) no reason; "
+                        f"ok={log_response.get('ok')} success={_lstdout.get('success')} "
+                        f"error={str(_lstdout.get('error'))[:300]}"
+                    )
+                if reason:
+                    return reason, str(task.get("name") or task.get("taskName") or "").strip()
         if lookup_index + 1 < lookup_attempts and lookup_delay_seconds > 0:
             sleep(lookup_delay_seconds)
     _debug(f"reason-lookup: exhausted {lookup_attempts} attempt(s), no reason for instance {alert['instance_id']}")
@@ -1100,6 +1166,7 @@ def auto_retry(
     progress_tv_result: dict[str, Any] = {}
     state = "UNKNOWN"
     attempts = initial_attempts
+    reason_lookup_attempted = False
     last_reason = failure_context(state_file, retry_key)["reason"]
     last_task_name = failure_context(state_file, retry_key)["task_name"] or alert.get("task_name") or ""
     last_mentions = failure_context(state_file, retry_key)["mentions"]
@@ -1147,6 +1214,24 @@ def auto_retry(
         mentions: str,
         task_name: str,
     ) -> dict[str, Any]:
+        # The reason is captured at pre-check, when DS may not yet have
+        # propagated the task-instance list or worker log.  By the time the
+        # instance actually recovers (minutes later) the logs are definitely
+        # available, so give the lookup one final chance before notifying.
+        if reason_lookup_attempted and (not reason or reason == GENERIC_FAILURE_REASON):
+            final_reason, final_task_name = fetch_failure_info_from_task_log(
+                alert,
+                ds_token,
+                f"{normalize_country(alert.get('country') or DEFAULT_COUNTRY)}-ds-auto-retry-"
+                f"{alert['instance_id']}-{attempts}-recovered",
+                gateway_runner,
+                lookup_attempts=reason_lookup_attempts,
+                lookup_delay_seconds=reason_lookup_delay_seconds,
+                sleep=sleep,
+            )
+            if final_reason:
+                reason = final_reason
+                task_name = final_task_name or task_name
         clear_attempts(state_file, retry_key)
         message = build_recovered_message(
             alert,
@@ -1247,6 +1332,7 @@ def auto_retry(
         progress_reason = extract_failure_reason(pre_check_result)
         task_name = alert.get("task_name") or ""
         if state in TERMINAL_FAILURE_STATES:
+            reason_lookup_attempted = True
             fetched_reason, fetched_task_name = fetch_failure_info_from_task_log(
                 alert,
                 ds_token,

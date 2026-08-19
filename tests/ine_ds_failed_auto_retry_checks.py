@@ -106,7 +106,30 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
                 state = "FAILURE" if get_instance_calls == 1 else "SUCCESS"
                 return {"ok": True, "stdout": {"success": True, "data": {"state": state}}}
             if action == "list_task_instances":
+                # The pre-check lookup runs before the worker log is visible, so
+                # it returns an empty list.  By recovery time the failed task is
+                # available and the recovery re-lookup surfaces the real reason.
+                if "-recovered" in request_id:
+                    return {
+                        "ok": True,
+                        "stdout": {
+                            "data": {
+                                "data": {
+                                    "totalList": [
+                                        {"id": 77, "name": "dwd_cn_sync", "state": "FAILURE"}
+                                    ]
+                                }
+                            }
+                        },
+                    }
                 return {"ok": True, "stdout": {"data": {"data": {"totalList": []}}}}
+            if action == "get_task_log":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "data": {"log": "ERROR - SQLState: 08004 - Connection refused"},
+                    },
+                }
             return {"ok": True, "stdout": {"success": True}}
 
         def tv_sender(message):
@@ -137,10 +160,21 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(result["attempts"], 1)
         self.assertEqual(
             [call[0] for call in calls],
-            ["get_instance", "list_task_instances", "retry_instance", "get_instance"],
+            [
+                "get_instance",
+                "list_task_instances",
+                "retry_instance",
+                "get_instance",
+                "list_task_instances",
+                "get_task_log",
+            ],
         )
         self.assertEqual(len(tv_messages), 1)
         self.assertIn("自动重跑已恢复成功，重跑次数：1", tv_messages[0])
+        # The recovery-time re-lookup must surface the real root cause instead
+        # of the generic "no reason" fallback.
+        self.assertIn("Connection refused", tv_messages[0])
+        self.assertNotIn("未从 DS 实例详情中解析到明确失败原因", tv_messages[0])
 
     def test_auto_retry_does_not_retry_when_precheck_is_already_success(self):
         calls = []
@@ -1039,6 +1073,82 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         reason = generic_retry._summarize_task_log(log_text)
 
         self.assertEqual(reason, "")
+
+    def test_summarize_detects_kill_statement_without_error_level(self):
+        """A SQL killed by a KILL statement at INFO level must still surface."""
+        log_text = (
+            "2026-08-13 07:26:54,566 - console - INFO - task start\n"
+            "2026-08-13 07:26:54,570 - console - INFO - 5025 (HY000): killed by kill statement : "
+            "KILL QUERY '4b2768d7-96a5-11f1-aabe-fa163ed414eb'\n"
+            "2026-08-13 07:26:54,581 - console - ERROR - run etl fail"
+        )
+        reason = generic_retry._summarize_task_log(log_text)
+        self.assertIn("killed by kill statement", reason)
+        self.assertIn("KILL QUERY", reason)
+
+    def test_summarize_detects_access_denied_without_error_level(self):
+        """Access-denied DB errors carry no error/exception keyword but are real causes."""
+        log_text = (
+            "2026-08-03 18:25:20.000 INFO  -  -> Access denied; you need (at least one of) "
+            "the SELECT privilege(s) for this operation"
+        )
+        reason = generic_retry._summarize_task_log(log_text)
+        self.assertIn("Access denied", reason)
+        self.assertIn("SELECT privilege", reason)
+
+    def test_fetch_failure_info_pages_until_failed_task_found(self):
+        """Large workflows can put the failed task beyond the first page."""
+        pages = iter(
+            [
+                {"totalList": [{"id": 10, "name": "早先成功任务", "state": "SUCCESS"}]},
+                {"totalList": [{"id": 20, "name": "失败任务", "state": "FAILURE"}]},
+                {"totalList": []},
+            ]
+        )
+        page_nos = []
+
+        def gateway(action, token, payload, request_id):
+            if action == "list_task_instances":
+                page_nos.append(payload["page_no"])
+                return {"ok": True, "stdout": {"data": {"data": next(pages)}}}
+            if action == "get_task_log":
+                return {
+                    "ok": True,
+                    "stdout": {"data": {"log": "ERROR - SQLState: 42000 - syntax error"}},
+                }
+            raise AssertionError(f"unexpected action: {action}")
+
+        reason, task_name = generic_retry.fetch_failure_info_from_task_log(
+            {"project_code": "158515082283008", "instance_id": "1722399"},
+            "token",
+            "cn-pages",
+            gateway,
+        )
+
+        self.assertEqual(task_name, "失败任务")
+        self.assertIn("SQLState", reason)
+        self.assertEqual(page_nos, [1, 2])
+
+    def test_fetch_failure_info_stops_after_empty_page(self):
+        """An empty first page means the list is empty; no extra pages are requested."""
+        calls = []
+
+        def gateway(action, token, payload, request_id):
+            calls.append(action)
+            if action == "list_task_instances":
+                return {"ok": True, "stdout": {"data": {"data": {"totalList": []}}}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        reason, task_name = generic_retry.fetch_failure_info_from_task_log(
+            {"project_code": "100", "instance_id": "200"},
+            "token",
+            "empty-pages",
+            gateway,
+        )
+
+        self.assertEqual(reason, "")
+        self.assertEqual(task_name, "")
+        self.assertEqual(calls, ["list_task_instances"])
 
     def test_failed_task_log_requests_enough_lines_to_reach_trailing_error(self):
         """The fallback log/detail request must not stop at the first 2,000 SQL lines."""
