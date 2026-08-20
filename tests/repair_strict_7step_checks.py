@@ -1621,6 +1621,41 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(tasks[0]["task_code"], "task-real")
         self.assertEqual(tasks[0]["task_name"], "dwd_fox_chatbot_dialog")
 
+    def test_step2_search_in_workflow_allows_only_leaf_non_copy_child_with_target(self):
+        module = load_module()
+        target = "dwd_fox_chatbot_dialog"
+        details = {
+            "root": {
+                "processDefinition": {"name": "DWD_ROOT"},
+                "taskDefinitionList": [
+                    {"code": "root-target", "name": target, "taskType": "SHELL"},
+                    {"code": "middle", "name": "middle", "taskType": "SUB_PROCESS", "taskParams": {"processDefinitionCode": "middle"}},
+                    {"code": "copy", "name": "copy", "taskType": "SUB_PROCESS", "taskParams": {"processDefinitionCode": "copy"}},
+                    {"code": "leaf", "name": "leaf", "taskType": "SUB_PROCESS", "taskParams": {"processDefinitionCode": "leaf"}},
+                ],
+            },
+            "middle": {
+                "processDefinition": {"name": "DWD_MIDDLE"},
+                "taskDefinitionList": [
+                    {"code": "middle-target", "name": target, "taskType": "SHELL"},
+                    {"code": "grandchild", "name": "grandchild", "taskType": "SUB_PROCESS", "taskParams": {"processDefinitionCode": "grandchild"}},
+                ],
+            },
+            "grandchild": {"processDefinition": {"name": "DWD_GRANDCHILD"}, "taskDefinitionList": []},
+            "copy": {"processDefinition": {"name": "DWD_COPY"}, "taskDefinitionList": [{"code": "copy-target", "name": target, "taskType": "SHELL"}]},
+            "leaf": {"processDefinition": {"name": "DWD_LEAF"}, "taskDefinitionList": [{"code": "leaf-target", "name": target, "taskType": "SHELL"}]},
+        }
+
+        def fake_detail(workflow_code, project_code=None):
+            return True, details[workflow_code], ""
+
+        with mock.patch.object(module, "get_workflow_definition_detail", side_effect=fake_detail), \
+            mock.patch.object(module, "log"):
+            result = module.step2_search_in_workflow("root", target)
+
+        self.assertEqual(result["workflow_code"], "leaf")
+        self.assertEqual(result["task_code"], "leaf-target")
+
     def test_step2_find_locations_keeps_out_of_window_status_and_skips_search(self):
         module = load_module()
         alerts = [
