@@ -154,9 +154,28 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                     self.assertIn("'900'", command)
                     self.assertIn("REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS=", command)
                     self.assertIn("'300'", command)
-                    self.assertIn("python3 -u core/repair_strict_7step.py", command)
+                    expected_script = (
+                        "core/repair_strict_7step.py"
+                        if country == "cn"
+                        else "core/historical_alert_repair.py"
+                    )
+                    self.assertIn(f"python3 -u {expected_script}", command)
                     self.assertIn("-o ConnectTimeout=15", command)
                     self.assertIn("-o ServerAliveInterval=30", command)
+
+    def test_non_cn_templates_schedule_historical_queue_consumption(self):
+        for display, (country, _) in EXPECTED.items():
+            if country == "cn":
+                continue
+            with self.subTest(display=display):
+                workflow = self.load_template(display)
+                schedules = {
+                    node["name"]: node["parameters"]["rule"]["interval"][0]["expression"]
+                    for node in workflow["nodes"]
+                    if node["type"] == "n8n-nodes-base.scheduleTrigger"
+                }
+                self.assertEqual(schedules["历史告警修复-每周末"], "0 0 3 * * 0")
+                self.assertEqual(schedules["历史告警修复-每月初"], "0 10 3 1 * *")
 
     def test_templates_do_not_embed_known_inline_secrets(self):
         secret_patterns = [
@@ -184,6 +203,7 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
                     if node["type"] in {
                         "n8n-nodes-base.webhook",
                         "n8n-nodes-base.manualTrigger",
+                        "n8n-nodes-base.scheduleTrigger",
                     }
                 ]
                 while pending:

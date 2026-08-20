@@ -1454,8 +1454,50 @@ def should_block_scheduled_workflow_match(location):
     return is_subprocess_task(location.get('task_type'))
 
 
-def step2_search_in_workflow(workflow_code, table_name, visited=None):
-    """在指定工作流中搜索表"""
+def is_copy_workflow_name(workflow_name):
+    """禁止自动执行名称含 copy 的工作流，匹配时忽略大小写。"""
+    return 'copy' in str(workflow_name or '').lower()
+
+
+def _select_runnable_candidate(candidates):
+    """优先选择可直接运行且非 DataX 的候选节点。"""
+    runnable_candidates = [
+        candidate for candidate in candidates
+        if str(candidate.get('task_flag', 'YES')).upper() != 'NO'
+    ]
+    if not runnable_candidates:
+        # 保留禁用节点供调用方标记为人工处理，不能让它被当作“未找到”。
+        non_datax_candidates = [
+            candidate for candidate in candidates
+            if candidate.get('task_type') != 'DATAX'
+        ]
+        return (non_datax_candidates or candidates)[0] if candidates else None
+
+    directly_runnable_candidates = [
+        candidate for candidate in runnable_candidates
+        if is_directly_runnable_task_type(candidate.get('task_type'))
+    ]
+    if directly_runnable_candidates:
+        non_datax_candidates = [
+            candidate for candidate in directly_runnable_candidates
+            if candidate.get('task_type') != 'DATAX'
+        ]
+        return (non_datax_candidates or directly_runnable_candidates)[0]
+
+    non_datax_candidates = [
+        candidate for candidate in runnable_candidates
+        if candidate.get('task_type') != 'DATAX'
+    ]
+    return (non_datax_candidates or runnable_candidates)[0]
+
+
+def step2_search_in_workflow(workflow_code, table_name, visited=None, is_subworkflow=False):
+    """在叶子子工作流中查找可重跑的目标表节点。
+
+    只允许启动满足以下条件的节点：所在工作流是子工作流、该工作流本身
+    不再包含子工作流、工作流名称不含 ``copy``。父工作流中的同名或同 SQL
+    节点不会被自动执行。
+    """
     workflow_code = str(workflow_code)
     visited = set(visited or set())
     if workflow_code in visited:
@@ -1469,8 +1511,12 @@ def step2_search_in_workflow(workflow_code, table_name, visited=None):
     search_term = strip_table_prefix(table_name)
     tasks = detail.get('taskDefinitionList', [])
     workflow_name = get_workflow_name_from_detail(detail)
-    candidates = []
+    if is_copy_workflow_name(workflow_name):
+        log(f"  ⏭️ 跳过名称含 copy 的工作流: {workflow_name}")
+        return None
+
     child_candidates = []
+    child_workflow_codes = []
 
     def build_candidate(task, task_name):
         return {
@@ -1482,6 +1528,33 @@ def step2_search_in_workflow(workflow_code, table_name, visited=None):
             'task_type': (task.get('taskType') or '').upper(),
         }
     
+    # 先进入所有子工作流查找。父节点名称不一定包含目标表，因此不能仅在
+    # 父节点命中时才向下递归。
+    for task in tasks:
+        if not is_subprocess_task(task.get('taskType')):
+            continue
+        task_params = normalize_task_params(task)
+        child_workflow_code = extract_subprocess_workflow_code(task, task_params)
+        if child_workflow_code and child_workflow_code != workflow_code:
+            child_workflow_codes.append(str(child_workflow_code))
+            child_result = step2_search_in_workflow(
+                child_workflow_code,
+                table_name,
+                visited=visited,
+                is_subworkflow=True,
+            )
+            if child_result:
+                child_candidates.append(child_result)
+
+    if child_candidates:
+        return _select_runnable_candidate(child_candidates)
+
+    # 只有叶子子工作流才可直接启动任务节点。包含任意子流程的工作流（包括
+    # 中间层子工作流）一律不运行自身节点，避免绕过下游依赖关系。
+    if not is_subworkflow or child_workflow_codes:
+        return None
+
+    candidates = []
     for task in tasks:
         task_name = task.get('name', '')
         task_name_lower = task_name.lower()
@@ -1496,13 +1569,6 @@ def step2_search_in_workflow(workflow_code, table_name, visited=None):
 
         if is_task_name_match(task_name, table_name):
             candidate = build_candidate(task, task_name)
-            if is_subprocess_task(candidate.get('task_type')):
-                child_workflow_code = extract_subprocess_workflow_code(task, task_params)
-                if child_workflow_code and child_workflow_code != workflow_code:
-                    child_result = step2_search_in_workflow(child_workflow_code, table_name, visited=visited)
-                    if child_result:
-                        child_candidates.append(child_result)
-                        continue
             candidates.append(candidate)
             continue
         
@@ -1511,75 +1577,7 @@ def step2_search_in_workflow(workflow_code, table_name, visited=None):
         if sql_targets_table(sql, table_name):
             candidates.append(build_candidate(task, task_name))
     
-    if child_candidates:
-        runnable_child_candidates = [
-            candidate for candidate in child_candidates
-            if str(candidate.get('task_flag', 'YES')).upper() != 'NO'
-        ]
-        if runnable_child_candidates:
-            directly_runnable_child_candidates = [
-                candidate for candidate in runnable_child_candidates
-                if is_directly_runnable_task_type(candidate.get('task_type'))
-            ]
-            if directly_runnable_child_candidates:
-                non_datax_directly_runnable_child_candidates = [
-                    candidate for candidate in directly_runnable_child_candidates
-                    if candidate.get('task_type') != 'DATAX'
-                ]
-                if non_datax_directly_runnable_child_candidates:
-                    return non_datax_directly_runnable_child_candidates[0]
-                return directly_runnable_child_candidates[0]
-            non_datax_runnable_child_candidates = [
-                candidate for candidate in runnable_child_candidates
-                if candidate.get('task_type') != 'DATAX'
-            ]
-            if non_datax_runnable_child_candidates:
-                return non_datax_runnable_child_candidates[0]
-            return runnable_child_candidates[0]
-        non_datax_child_candidates = [
-            candidate for candidate in child_candidates
-            if candidate.get('task_type') != 'DATAX'
-        ]
-        if non_datax_child_candidates:
-            return non_datax_child_candidates[0]
-        return child_candidates[0]
-
-    if not candidates:
-        return None
-
-    runnable_candidates = [
-        candidate for candidate in candidates
-        if str(candidate.get('task_flag', 'YES')).upper() != 'NO'
-    ]
-    if runnable_candidates:
-        directly_runnable_candidates = [
-            candidate for candidate in runnable_candidates
-            if is_directly_runnable_task_type(candidate.get('task_type'))
-        ]
-        if directly_runnable_candidates:
-            non_datax_directly_runnable_candidates = [
-                candidate for candidate in directly_runnable_candidates
-                if candidate.get('task_type') != 'DATAX'
-            ]
-            if non_datax_directly_runnable_candidates:
-                return non_datax_directly_runnable_candidates[0]
-            return directly_runnable_candidates[0]
-        non_datax_runnable_candidates = [
-            candidate for candidate in runnable_candidates
-            if candidate.get('task_type') != 'DATAX'
-        ]
-        if non_datax_runnable_candidates:
-            return non_datax_runnable_candidates[0]
-        return runnable_candidates[0]
-
-    non_datax_candidates = [
-        candidate for candidate in candidates
-        if candidate.get('task_type') != 'DATAX'
-    ]
-    if non_datax_candidates:
-        return non_datax_candidates[0]
-    
-    return candidates[0]
+    return _select_runnable_candidate(candidates)
 
 
 def step2_find_locations(alerts):

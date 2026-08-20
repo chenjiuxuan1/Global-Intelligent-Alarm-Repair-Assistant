@@ -260,6 +260,22 @@ TABLE_CONFIG = {
 }
 
 
+HISTORICAL_REPAIR_CONFIG = {
+    # The historical queue lives in each non-CN country's StarRocks testdb.
+    # Keep these separate from DB_CONFIG: DB_CONFIG points at the quality-result
+    # source, while this connection is allowed to create and mutate queue rows.
+    "host": _get_env("SR_TESTDB_HOST", ""),
+    "port": int(_get_env("SR_TESTDB_PORT", "9030")),
+    "user": _get_env("SR_TESTDB_USER", ""),
+    "password": _get_env("SR_TESTDB_PASSWORD", ""),
+    "database": _get_env("SR_TESTDB_DATABASE", "testdb"),
+    "table": _get_env("HISTORICAL_REPAIR_QUEUE_TABLE", "intelligent_alarm_repair_queue"),
+    "idle_poll_seconds": int(_get_env("DS_IDLE_POLL_SECONDS", "300")),
+    "idle_max_wait_seconds": int(_get_env("DS_IDLE_MAX_WAIT_SECONDS", "3600")),
+    "batch_size": int(_get_env("HISTORICAL_REPAIR_BATCH_SIZE", "1")),
+}
+
+
 REPAIR_CONFIG = {
     "scan_lookback_days": int(_get_env("SCAN_LOOKBACK_DAYS", "8")),
     "priority_workflow_codes": json.loads(_get_env("PRIORITY_WORKFLOW_CODES_JSON", "[]")),

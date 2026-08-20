@@ -277,6 +277,11 @@ def repair_command(country, unbuffered=False):
     # both webhook and manual paths unbuffered.
     python = "python3 -u"
     lock_file = f"/tmp/intelligent_alarm_repair_{country}.lock"
+    repair_script = (
+        "core/repair_strict_7step.py"
+        if country == "cn"
+        else "core/historical_alert_repair.py"
+    )
     body = (
         f"LOCK_FILE={shell_quote(lock_file)}; "
         "echo \"并发锁文件: $LOCK_FILE\"; "
@@ -284,7 +289,7 @@ def repair_command(country, unbuffered=False):
         "if ! flock -n 9; then echo '已有智能修复任务运行中，跳过本次执行'; exit 0; fi; "
         "echo \"修复进程最长运行: ${REPAIR_PROCESS_MAX_SECONDS}秒\"; "
         f"timeout --signal=TERM --kill-after=30s \"${{REPAIR_PROCESS_MAX_SECONDS}}s\" "
-        f"{python} core/repair_strict_7step.py"
+        f"{python} {repair_script}"
     )
     return remote(country, platform_command(country, body, "智能修复"))
 
@@ -368,6 +373,35 @@ def redact_command(command):
     return redacted
 
 
+def add_historical_repair_schedules(workflow, country):
+    """Schedule non-CN queue consumption even when no new webhook arrives."""
+    if country == "cn":
+        return
+    target = next((node["name"] for node in workflow.get("nodes", []) if node.get("name") == "智能修复"), None)
+    if not target:
+        return
+    existing = {node.get("name") for node in workflow["nodes"]}
+    schedules = [
+        ("历史告警修复-每周末", "0 0 3 * * 0", [120, 420]),
+        ("历史告警修复-每月初", "0 10 3 1 * *", [120, 520]),
+    ]
+    for name, expression, position in schedules:
+        if name in existing:
+            continue
+        workflow["nodes"].append(
+            {
+                "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": expression}]}},
+                "type": "n8n-nodes-base.scheduleTrigger",
+                "typeVersion": 1.2,
+                "position": position,
+                "name": name,
+            }
+        )
+        workflow.setdefault("connections", {})[name] = {
+            "main": [[{"node": target, "type": "main", "index": 0}]]
+        }
+
+
 def build_template(country):
     source_path = Path(COUNTRIES[country]["source"])
     fallback_path = OUTPUT_DIR / f"智能告警修复-{COUNTRIES[country]['display']}-统一平台模板.json"
@@ -397,6 +431,7 @@ def build_template(country):
     )
 
     prune_disconnected_nodes(result)
+    add_historical_repair_schedules(result, country)
 
     for node in result.get("nodes", []):
         parameters = node.get("parameters", {})

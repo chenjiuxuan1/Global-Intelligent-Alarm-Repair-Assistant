@@ -354,14 +354,26 @@ class RepairStrict7StepTests(unittest.TestCase):
             if endpoint == "/projects/default-project/process-definition/wf-1":
                 return True, {
                     "processDefinition": {"name": "DWD"},
+                    "taskDefinitionList": [{
+                        "code": "task-subprocess",
+                        "name": "dwd_fox_mission_log",
+                        "taskType": "SUB_PROCESS",
+                        "taskParams": {"processDefinitionCode": "wf-1-child"},
+                    }],
+                }, ""
+            if endpoint == "/projects/default-project/workflow-definition/wf-1-child":
+                return False, {}, "not json"
+            if endpoint == "/projects/default-project/process-definition/wf-1-child":
+                return True, {
+                    "processDefinition": {"name": "DWD_CHILD"},
                     "taskDefinitionList": [{"code": "task-1", "name": "dwd_fox_mission_log"}],
                 }, ""
             raise AssertionError(endpoint)
 
         with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get):
-            result = module.step2_search_in_workflow("wf-1", "dwd_fox_mission_log")
+            result = module.step2_search_in_workflow("wf-1", "dwd_fox_mission_log", is_subworkflow=True)
 
-        self.assertEqual(result["workflow_name"], "DWD")
+        self.assertEqual(result["workflow_name"], "DWD_CHILD")
         self.assertEqual(result["task_code"], "task-1")
 
     def test_step2_search_in_workflow_does_not_match_sql_only_reference_from_other_task(self):
@@ -1393,6 +1405,18 @@ class RepairStrict7StepTests(unittest.TestCase):
             if endpoint == "/projects/default-project/process-definition/wf-1":
                 return True, {
                     "processDefinition": {"name": "DWD"},
+                    "taskDefinitionList": [{
+                        "code": "task-subprocess",
+                        "name": "dwd_fox_mission_log",
+                        "taskType": "SUB_PROCESS",
+                        "taskParams": {"processDefinitionCode": "wf-1-child"},
+                    }],
+                }, ""
+            if endpoint == "/projects/default-project/workflow-definition/wf-1-child":
+                return False, {}, "not json"
+            if endpoint == "/projects/default-project/process-definition/wf-1-child":
+                return True, {
+                    "processDefinition": {"name": "DWD_CHILD"},
                     "taskDefinitionList": [{"code": "task-1", "name": "dwd_fox_mission_log"}],
                 }, ""
             return False, {}, "not found"
@@ -1400,7 +1424,7 @@ class RepairStrict7StepTests(unittest.TestCase):
         with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get):
             tasks = module.step2_find_locations(alerts)
 
-        self.assertEqual(tasks[0]["workflow_code"], "wf-1")
+        self.assertEqual(tasks[0]["workflow_code"], "wf-1-child")
         self.assertEqual(tasks[0]["task_code"], "task-1")
 
     def test_step2_find_locations_scans_multiple_workflow_pages(self):
@@ -1434,6 +1458,18 @@ class RepairStrict7StepTests(unittest.TestCase):
             if endpoint == "/projects/default-project/process-definition/wf-page2":
                 return True, {
                     "processDefinition": {"name": "PAGE2"},
+                    "taskDefinitionList": [{
+                        "code": "task-page2-child",
+                        "name": "dwd_c_coupon",
+                        "taskType": "SUB_PROCESS",
+                        "taskParams": {"processDefinitionCode": "wf-page2-child"},
+                    }],
+                }, ""
+            if endpoint == "/projects/default-project/workflow-definition/wf-page2-child":
+                return False, {}, "not json"
+            if endpoint == "/projects/default-project/process-definition/wf-page2-child":
+                return True, {
+                    "processDefinition": {"name": "PAGE2_CHILD"},
                     "taskDefinitionList": [{"code": "task-b", "name": "dwd_c_coupon"}],
                 }, ""
             return False, {}, f"unexpected endpoint: {endpoint}"
@@ -1441,12 +1477,13 @@ class RepairStrict7StepTests(unittest.TestCase):
         with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get):
             tasks = module.step2_find_locations(alerts)
 
-        self.assertEqual(tasks[0]["workflow_code"], "wf-page2")
+        self.assertEqual(tasks[0]["workflow_code"], "wf-page2-child")
         self.assertEqual(tasks[0]["task_code"], "task-b")
-        self.assertEqual(tasks[0]["workflow_name"], "PAGE2")
+        self.assertEqual(tasks[0]["workflow_name"], "PAGE2_CHILD")
 
     def test_step2_find_locations_prefers_unscheduled_child_workflow_over_scheduled_parent(self):
         module = load_module()
+        module.PRIORITY_WORKFLOWS = [('158514956979200', '印尼-数仓工作流（1/2H）')]
         alerts = [{"id": 1, "table": "ods_cash_model_model", "dt": "2026-05-10", "diff": 1}]
 
         def fake_ds_api_get(endpoint):
@@ -1458,6 +1495,7 @@ class RepairStrict7StepTests(unittest.TestCase):
                             "code": "task-parent",
                             "name": "ods_cash_model_model",
                             "taskType": "SUB_PROCESS",
+                            "taskParams": {"processDefinitionCode": "child-free"},
                         }
                     ],
                 }, ""
@@ -1490,7 +1528,7 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(tasks[0]["task_code"], "task-child")
         self.assertEqual(tasks[0]["workflow_name"], "ODS_CASH_MODEL")
 
-    def test_step2_find_locations_marks_scheduled_parent_only_match_as_manual_review(self):
+    def test_step2_find_locations_rejects_scheduled_parent_without_leaf_child_target(self):
         module = load_module()
         module.PRIORITY_WORKFLOWS = [('158514956979200', '印尼-数仓工作流（1/2H）')]
         alerts = [{"id": 1, "table": "ods_cash_model_model", "dt": "2026-05-10", "diff": 1}]
@@ -1525,8 +1563,7 @@ class RepairStrict7StepTests(unittest.TestCase):
             tasks = module.step2_find_locations(alerts)
 
         self.assertEqual(tasks[0]["workflow_code"], "")
-        self.assertIn("带定时", tasks[0]["error"])
-        self.assertIn("1/2H", tasks[0]["error"])
+        self.assertIn("获取工作流列表失败", tasks[0]["error"])
 
     def test_step2_find_locations_descends_into_subprocess_child_workflow(self):
         module = load_module()
@@ -1579,7 +1616,7 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(tasks[0]["task_code"], "task-child")
         self.assertEqual(tasks[0]["task_name"], "dwd_fox_chatbot_dialog")
 
-    def test_step2_find_locations_allows_scheduled_workflow_when_matching_real_task(self):
+    def test_step2_find_locations_rejects_target_task_in_parent_workflow(self):
         module = load_module()
         module.PRIORITY_WORKFLOWS = []
         alerts = [{"id": 1, "table": "dwd_fox_chatbot_dialog", "dt": "2026-05-11", "diff": 1}]
@@ -1616,10 +1653,71 @@ class RepairStrict7StepTests(unittest.TestCase):
         with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get):
             tasks = module.step2_find_locations(alerts)
 
-        self.assertEqual(tasks[0]["workflow_code"], "wf-dwd-paimon")
-        self.assertEqual(tasks[0]["workflow_name"], "DWD_PAIMON")
-        self.assertEqual(tasks[0]["task_code"], "task-real")
-        self.assertEqual(tasks[0]["task_name"], "dwd_fox_chatbot_dialog")
+        self.assertEqual(tasks[0]["workflow_code"], "")
+        self.assertEqual(tasks[0]["workflow_name"], "未找到")
+        self.assertIn("未找到工作流", tasks[0]["error"])
+
+    def test_step2_search_in_workflow_rejects_copy_named_leaf_subworkflow(self):
+        module = load_module()
+        detail = {
+            "processDefinition": {"name": "DWD_COPY"},
+            "taskDefinitionList": [
+                {
+                    "code": "task-copy",
+                    "name": "dwd_fox_chatbot_dialog",
+                    "taskType": "SHELL",
+                }
+            ],
+        }
+
+        with mock.patch.object(module, "get_workflow_definition_detail", return_value=(True, detail, "")), \
+            mock.patch.object(module, "log"):
+            result = module.step2_search_in_workflow(
+                "wf-dwd-copy",
+                "dwd_fox_chatbot_dialog",
+                is_subworkflow=True,
+            )
+
+        self.assertIsNone(result)
+
+    def test_step2_search_in_workflow_rejects_non_leaf_subworkflow_target_task(self):
+        module = load_module()
+        parent_detail = {
+            "processDefinition": {"name": "DWD_PARENT"},
+            "taskDefinitionList": [
+                {
+                    "code": "task-parent-target",
+                    "name": "dwd_fox_chatbot_dialog",
+                    "taskType": "SHELL",
+                },
+                {
+                    "code": "task-grandchild",
+                    "name": "other_child",
+                    "taskType": "SUB_PROCESS",
+                    "taskParams": {"processDefinitionCode": "wf-grandchild"},
+                },
+            ],
+        }
+        grandchild_detail = {
+            "processDefinition": {"name": "DWD_GRANDCHILD"},
+            "taskDefinitionList": [],
+        }
+
+        def fake_detail(workflow_code, project_code=None):
+            if workflow_code == "wf-parent":
+                return True, parent_detail, ""
+            if workflow_code == "wf-grandchild":
+                return True, grandchild_detail, ""
+            raise AssertionError(workflow_code)
+
+        with mock.patch.object(module, "get_workflow_definition_detail", side_effect=fake_detail):
+            result = module.step2_search_in_workflow(
+                "wf-parent",
+                "dwd_fox_chatbot_dialog",
+                is_subworkflow=True,
+            )
+
+        self.assertIsNone(result)
 
     def test_step2_find_locations_keeps_out_of_window_status_and_skips_search(self):
         module = load_module()
@@ -1692,7 +1790,7 @@ class RepairStrict7StepTests(unittest.TestCase):
             raise AssertionError(endpoint)
 
         with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get):
-            result = module.step2_search_in_workflow("wf-1", "dwd_fox_mission_log")
+            result = module.step2_search_in_workflow("wf-1", "dwd_fox_mission_log", is_subworkflow=True)
 
         self.assertEqual(result["task_code"], "task-1")
         self.assertEqual(result["task_flag"], "NO")
@@ -1722,7 +1820,7 @@ class RepairStrict7StepTests(unittest.TestCase):
             raise AssertionError(endpoint)
 
         with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get):
-            result = module.step2_search_in_workflow("wf-1", "ads_3324_tdtools_match_batch_result")
+            result = module.step2_search_in_workflow("wf-1", "ads_3324_tdtools_match_batch_result", is_subworkflow=True)
 
         self.assertEqual(result["task_code"], "task-shell")
         self.assertEqual(result["task_type"], "SHELL")
@@ -1754,7 +1852,7 @@ class RepairStrict7StepTests(unittest.TestCase):
             raise AssertionError(endpoint)
 
         with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get):
-            result = module.step2_search_in_workflow("wf-1", "dws_user_performance_first_loan_info")
+            result = module.step2_search_in_workflow("wf-1", "dws_user_performance_first_loan_info", is_subworkflow=True)
 
         self.assertEqual(result["task_code"], "task-runnable")
         self.assertEqual(result["task_flag"], "YES")
@@ -1786,7 +1884,7 @@ class RepairStrict7StepTests(unittest.TestCase):
             raise AssertionError(endpoint)
 
         with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get):
-            result = module.step2_search_in_workflow("wf-1", "dwd_user_activity_log")
+            result = module.step2_search_in_workflow("wf-1", "dwd_user_activity_log", is_subworkflow=True)
 
         self.assertEqual(result["task_code"], "task-sql")
         self.assertEqual(result["task_type"], "SHELL")

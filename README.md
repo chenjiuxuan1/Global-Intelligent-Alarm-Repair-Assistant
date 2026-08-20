@@ -15,6 +15,20 @@ APP_COUNTRY=ph python3 core/send_tv_report.py --test
 APP_COUNTRY=ph python3 core/auto_stop_abnormal_schedule.py
 ```
 
+## 非中国历史告警修复
+
+TH、INE、PK、MX、PH 使用 `core/historical_alert_repair.py`：它会在各国
+StarRocks `testdb.intelligent_alarm_repair_queue` 创建并维护告警队列。必须在
+`.env.local` 配置独立的 `SR_TESTDB_HOST/PORT/USER/PASSWORD`，不得复用
+`wattrel` 数据库连接。
+
+- 7 天内缺失：立即按队列执行；
+- 90 天内缺失：仅周末执行；
+- 一年内缺失：仅每月 1 日执行；
+- `diff < 0`（数据多余）或超过一年：写入 `manual_review`，不启动 DS；
+- 每次从队列取任务前，先每 5 分钟检查一次 DS 是否全局空闲；修复和复验后
+  原质量告警消失才删除对应队列记录。
+
 也可以不复制 profile，直接通过环境变量选择国家：
 
 ```bash

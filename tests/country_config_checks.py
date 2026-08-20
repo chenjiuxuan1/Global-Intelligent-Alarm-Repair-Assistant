@@ -128,8 +128,8 @@ class CountryConfigTests(unittest.TestCase):
             module = load_module()
 
         self.assertEqual(module.WORKSPACE_CONFIG["root"], "/srv/ine-repair")
-        self.assertTrue(module.WORKSPACE_CONFIG["manual_review_state_file"].startswith("/srv/ine-repair/"))
-        self.assertTrue(module.WORKSPACE_CONFIG["auto_repair_records_dir"].startswith("/srv/ine-repair/"))
+        self.assertTrue(module.WORKSPACE_CONFIG["manual_review_state_file"].replace("\\", "/").startswith("/srv/ine-repair/"))
+        self.assertTrue(module.WORKSPACE_CONFIG["auto_repair_records_dir"].replace("\\", "/").startswith("/srv/ine-repair/"))
 
 
 if __name__ == "__main__":
