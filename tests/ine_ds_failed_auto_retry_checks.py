@@ -169,12 +169,13 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
                 "get_task_log",
             ],
         )
-        self.assertEqual(len(tv_messages), 1)
-        self.assertIn("自动重跑已恢复成功，重跑次数：1", tv_messages[0])
+        self.assertEqual(len(tv_messages), 2)
+        self.assertIn("目前自动失败重试中，执行次数：1", tv_messages[0])
+        self.assertIn("自动重跑已恢复成功，重跑次数：1", tv_messages[1])
         # The recovery-time re-lookup must surface the real root cause instead
         # of the generic "no reason" fallback.
-        self.assertIn("Connection refused", tv_messages[0])
-        self.assertNotIn("未从 DS 实例详情中解析到明确失败原因", tv_messages[0])
+        self.assertIn("Connection refused", tv_messages[1])
+        self.assertNotIn("未从 DS 实例详情中解析到明确失败原因", tv_messages[1])
 
     def test_auto_retry_does_not_retry_when_precheck_is_already_success(self):
         calls = []
@@ -366,10 +367,15 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(result["status"], "failed_after_max_attempts")
         self.assertEqual(result["attempts"], 3)
         self.assertEqual([seconds for seconds in sleeps if seconds == 180], [180, 180, 180])
-        self.assertEqual(len(tv_messages), 1)
-        self.assertIn("自动重跑已完成 3 次且全部失败", tv_messages[0])
-        self.assertIn("当前状态：FAILURE", tv_messages[0])
-        self.assertIn("INE-DWD", tv_messages[0])
+        # Terminal failures must notify on every attempt, not only after all
+        # retries exhaust.
+        self.assertEqual(len(tv_messages), 4)
+        self.assertIn("目前自动失败重试中，执行次数：1", tv_messages[0])
+        self.assertIn("目前自动失败重试中，执行次数：2", tv_messages[1])
+        self.assertIn("目前自动失败重试中，执行次数：3", tv_messages[2])
+        self.assertIn("自动重跑已完成 3 次且全部失败", tv_messages[3])
+        self.assertIn("当前状态：FAILURE", tv_messages[3])
+        self.assertIn("INE-DWD", tv_messages[3])
 
     def test_payload_b64_cli_shape_is_json_decodable(self):
         raw = {"project_code": "100", "instance_id": "200"}
@@ -700,9 +706,13 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(result["status"], "timeout_needs_owner")
         self.assertIn("list_task_instances", calls)
         self.assertIn("get_task_log", calls)
-        self.assertIn("原失败任务：dwd_pk_user_snapshot", messages[0])
+        # The progress notification now fires before the first retry, carrying
+        # the located task identity and root cause.
+        self.assertIn("目前自动失败重试中，执行次数：1", messages[0])
+        self.assertIn("失败任务：dwd_pk_user_snapshot", messages[0])
         self.assertIn("Cannot cast column event_time", messages[0])
         self.assertNotIn("process-level wrapper error", messages[0])
+        self.assertIn("原失败任务：dwd_pk_user_snapshot", messages[1])
         self.assertIn("失败任务：dwd_pk_user_snapshot", messages[-1])
         self.assertIn("定时任务 30 分钟内未恢复", messages[-1])
         self.assertIn("实际重跑次数：1", messages[-1])
@@ -842,10 +852,11 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
 
         self.assertEqual(result["status"], "recovered")
         self.assertEqual(retry_calls, 1)
-        self.assertEqual(len(messages), 2)
-        self.assertIn("自动重跑后任务仍在运行中", messages[0])
-        self.assertIn("自动重跑已恢复成功", messages[1])
+        self.assertEqual(len(messages), 3)
+        self.assertIn("目前自动失败重试中，执行次数：1", messages[0])
+        self.assertIn("自动重跑后任务仍在运行中", messages[1])
         self.assertIn("原失败任务：dwd_pk_user_snapshot", messages[1])
+        self.assertIn("自动重跑已恢复成功", messages[2])
 
     def test_generic_retry_max_attempt_summary_uses_concise_task_log_root_cause(self):
         messages = []
@@ -1149,6 +1160,42 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(reason, "")
         self.assertEqual(task_name, "")
         self.assertEqual(calls, ["list_task_instances"])
+
+    def test_fetch_failure_info_falls_back_to_latest_task_log_when_no_failed_state(self):
+        """When no task classifies as failed, the most recent task log is still tried."""
+        def gateway(action, token, payload, request_id):
+            if action == "list_task_instances":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "data": {
+                            "data": {
+                                "totalList": [
+                                    {"id": 100, "name": "早先任务", "state": "SUCCESS"},
+                                    {"id": 200, "name": "最新任务", "state": "SUCCESS"},
+                                ]
+                            }
+                        }
+                    },
+                }
+            if action == "get_task_log":
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "data": {"log": "ERROR - 5025 (HY000): killed by kill statement : KILL QUERY 'x'"},
+                    },
+                }
+            raise AssertionError(f"unexpected action: {action}")
+
+        reason, task_name = generic_retry.fetch_failure_info_from_task_log(
+            {"project_code": "12739141488160", "instance_id": "4117583"},
+            "token",
+            "ine-latest-fallback",
+            gateway,
+        )
+
+        self.assertEqual(task_name, "最新任务")
+        self.assertIn("killed by kill statement", reason)
 
     def test_failed_task_log_requests_enough_lines_to_reach_trailing_error(self):
         """The fallback log/detail request must not stop at the first 2,000 SQL lines."""

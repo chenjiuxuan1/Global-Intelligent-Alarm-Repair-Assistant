@@ -59,7 +59,7 @@ COUNTRY_NAMES = {
 SUCCESS_STATES = {"SUCCESS"}
 TERMINAL_FAILURE_STATES = {"FAILURE", "FAILED", "STOP", "KILL", "KILLING", "6"}
 GENERIC_FAILURE_REASON = "未从 DS 实例详情中解析到明确失败原因，请查看 DS 实例日志"
-FAILED_TASK_STATES = {"FAILURE", "FAILED", "STOP", "STOPPED", "KILL", "KILLING", "ERROR", "5", "6", "7", "9", "失败", "停止"}
+FAILED_TASK_STATES = {"FAILURE", "FAILED", "STOP", "STOPPED", "KILL", "KILLING", "ERROR", "5", "6", "9", "失败", "停止"}
 
 # Real DB/worker failures are often logged without an ERROR/FATAL level or an
 # exception/failed keyword (e.g. ``Access denied``, ``killed by kill
@@ -777,9 +777,42 @@ def fetch_failure_info_from_task_log(
         int(os.getenv("DS_FAILED_TASK_LOOKUP_PAGES", "5")),
     )
     lookup_attempts = max(1, int(lookup_attempts))
+
+    def try_task_log(task: dict[str, Any], attempt_label: str) -> tuple[str, str]:
+        """Fetch one task's log and return (reason, task_name) or empty."""
+        task_instance_id = task.get("id") or task.get("taskInstanceId")
+        if not task_instance_id:
+            return "", ""
+        log_response = gateway_runner(
+            "get_task_log",
+            ds_token,
+            {
+                **payload,
+                "task_instance_id": task_instance_id,
+                "task_name": task.get("name") or task.get("taskName") or "",
+                "task_code": task.get("taskCode") or "",
+                "limit": task_log_limit,
+            },
+            f"{request_id}-task-{task_instance_id}-log-{attempt_label}",
+        )
+        reason = extract_task_log_failure_reason(log_response)
+        if not reason:
+            _lstdout = log_response.get("stdout") or {}
+            _debug(
+                f"reason-lookup: task {task_instance_id} ({task.get('name')}) no reason; "
+                f"ok={log_response.get('ok')} success={_lstdout.get('success')} "
+                f"error={str(_lstdout.get('error'))[:300]}"
+            )
+        return reason, str(task.get("name") or task.get("taskName") or "").strip()
+
+    def task_id(task: dict[str, Any]) -> int:
+        return int(task.get("id") or task.get("taskInstanceId") or 0)
+
     for lookup_index in range(lookup_attempts):
         # Large workflows can put the failed task beyond the first page.  Read
         # the list page by page and stop as soon as a page is empty.
+        latest_task: dict[str, Any] | None = None
+        saw_failed_task = False
         for page in range(1, max_pages + 1):
             task_list_response = gateway_runner(
                 "list_task_instances",
@@ -790,6 +823,9 @@ def fetch_failure_info_from_task_log(
             all_tasks = _task_instances_from_response(task_list_response)
             if not all_tasks:
                 break
+            for task in all_tasks:
+                if latest_task is None or task_id(task) > task_id(latest_task):
+                    latest_task = task
             failed_tasks = [task for task in all_tasks if _is_failed_task(task)]
             if not failed_tasks:
                 task_states = [str(t.get("stateDesc") or t.get("state") or "?") for t in all_tasks]
@@ -801,36 +837,19 @@ def fetch_failure_info_from_task_log(
                     f"error={str(_stdout.get('error'))[:300]}"
                 )
                 continue
-            failed_tasks.sort(
-                key=lambda task: int(task.get("id") or task.get("taskInstanceId") or 0),
-                reverse=True,
-            )
+            saw_failed_task = True
+            failed_tasks.sort(key=task_id, reverse=True)
             for task in failed_tasks:
-                task_instance_id = task.get("id") or task.get("taskInstanceId")
-                if not task_instance_id:
-                    continue
-                log_response = gateway_runner(
-                    "get_task_log",
-                    ds_token,
-                    {
-                        **payload,
-                        "task_instance_id": task_instance_id,
-                        "task_name": task.get("name") or task.get("taskName") or "",
-                        "task_code": task.get("taskCode") or "",
-                        "limit": task_log_limit,
-                    },
-                    f"{request_id}-task-{task_instance_id}-log-{lookup_index + 1}",
-                )
-                reason = extract_task_log_failure_reason(log_response)
-                if not reason:
-                    _lstdout = log_response.get("stdout") or {}
-                    _debug(
-                        f"reason-lookup: task {task_instance_id} ({task.get('name')}) no reason; "
-                        f"ok={log_response.get('ok')} success={_lstdout.get('success')} "
-                        f"error={str(_lstdout.get('error'))[:300]}"
-                    )
+                reason, failed_task_name = try_task_log(task, f"{lookup_index + 1}")
                 if reason:
-                    return reason, str(task.get("name") or task.get("taskName") or "").strip()
+                    return reason, failed_task_name
+        # No task classified as failed (the state encoding can differ per DS
+        # version).  The most recently created task is usually the failure
+        # culprit, so give its log one last chance.
+        if not saw_failed_task and latest_task is not None:
+            reason, latest_task_name = try_task_log(latest_task, f"{lookup_index + 1}-latest")
+            if reason:
+                return reason, latest_task_name
         if lookup_index + 1 < lookup_attempts and lookup_delay_seconds > 0:
             sleep(lookup_delay_seconds)
     _debug(f"reason-lookup: exhausted {lookup_attempts} attempt(s), no reason for instance {alert['instance_id']}")
@@ -1375,6 +1394,20 @@ def auto_retry(
             )
             if monitor_result is not None:
                 return monitor_result
+
+        # Notify immediately when a failure is about to be retried.  A workflow
+        # that stays in a terminal FAILURE state never reaches the "仍在运行中"
+        # monitor notification, so without this owners only learn about a
+        # failure after every retry exhausts.
+        progress_tv_result = tv_sender(
+            build_retry_progress_message(
+                alert,
+                next_attempt,
+                recovered_reason,
+                mentions,
+                task_name,
+            )
+        )
 
         attempts = record_attempt(state_file, retry_key)
         last_result = gateway_runner("retry_instance", ds_token, payload, request_id)
