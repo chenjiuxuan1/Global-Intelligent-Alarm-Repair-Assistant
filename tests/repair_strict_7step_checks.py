@@ -529,7 +529,7 @@ class RepairStrict7StepTests(unittest.TestCase):
             return True, {"data": [13579]}, ""
 
         with mock.patch.object(module, "ds_api_post", side_effect=fake_ds_api_post), \
-            mock.patch.object(module, "find_conflicting_running_instance", return_value=None), \
+            mock.patch.object(module, "get_running_instances_by_workflow", return_value=[]), \
             mock.patch.object(module, "log"), \
             mock.patch("time.sleep"):
             results, running_instances = module.step3_start_repair(tasks)
@@ -579,7 +579,7 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(results[0]["instance_id"], 45678)
         self.assertEqual(running_instances[0]["instance_id"], 45678)
 
-    def test_step3_start_repair_skips_when_workflow_conflict_does_not_clear(self):
+    def test_step3_start_repair_skips_when_workflow_idle_wait_times_out(self):
         module = load_module()
         tasks = [
             {
@@ -595,12 +595,12 @@ class RepairStrict7StepTests(unittest.TestCase):
         conflict = {"id": 999, "commandType": "SCHEDULER", "state": "RUNNING_EXECUTION"}
         with mock.patch.object(
             module,
-            "find_conflicting_running_instance",
-            return_value=conflict,
+            "get_running_instances_by_workflow",
+            return_value=[conflict],
         ), mock.patch.object(
             module,
-            "wait_for_workflow_conflict_clear",
-            return_value=(False, conflict),
+            "wait_until_workflow_idle",
+            return_value=(False, [conflict]),
         ), mock.patch.object(module, "ds_api_post") as mocked_post, mock.patch.object(module, "log"):
             results, running_instances = module.step3_start_repair(tasks)
 
@@ -624,8 +624,8 @@ class RepairStrict7StepTests(unittest.TestCase):
         ]
 
         conflict = {"id": 999, "commandType": "START_PROCESS", "state": "RUNNING_EXECUTION"}
-        with mock.patch.object(module, "find_conflicting_running_instance", return_value=conflict), \
-            mock.patch.object(module, "wait_for_workflow_conflict_clear", return_value=(True, None)), \
+        with mock.patch.object(module, "get_running_instances_by_workflow", return_value=[conflict]), \
+            mock.patch.object(module, "wait_until_workflow_idle", return_value=(True, None)), \
             mock.patch.object(module, "start_workflow_instance_with_fallbacks") as mocked_start, \
             mock.patch.object(module, "log"), \
             mock.patch("time.sleep"):
@@ -643,6 +643,56 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(results[0]["status"], "success")
         self.assertEqual(results[0]["instance_id"], 12345)
         self.assertEqual(running_instances[0]["instance_id"], 12345)
+
+    def test_wait_until_workflow_idle_returns_immediately_when_idle(self):
+        module = load_module()
+        with mock.patch.object(module, "get_running_instances_by_workflow", return_value=[]), \
+            mock.patch.object(module, "log"), \
+            mock.patch("time.sleep") as mocked_sleep:
+            ok, remaining = module.wait_until_workflow_idle("p", "wf-1", poll_interval=300, max_wait=0)
+        self.assertTrue(ok)
+        self.assertIsNone(remaining)
+        mocked_sleep.assert_not_called()
+
+    def test_wait_until_workflow_idle_polls_every_interval_until_idle(self):
+        module = load_module()
+        busy = [{"id": 111, "state": "RUNNING_EXECUTION"}]
+        calls = {"n": 0}
+
+        def fake_running(project_code, workflow_code):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                return busy
+            return []
+
+        with mock.patch.object(module, "get_running_instances_by_workflow", side_effect=fake_running), \
+            mock.patch.object(module, "log"), \
+            mock.patch("time.sleep") as mocked_sleep:
+            ok, remaining = module.wait_until_workflow_idle("p", "wf-1", poll_interval=300, max_wait=0)
+        self.assertTrue(ok)
+        self.assertIsNone(remaining)
+        self.assertEqual(calls["n"], 3)
+        mocked_sleep.assert_has_calls([mock.call(300), mock.call(300)])
+
+    def test_wait_until_workflow_idle_times_out_when_max_wait_exceeded(self):
+        module = load_module()
+        busy = [{"id": 111, "state": "RUNNING_EXECUTION"}]
+
+        def fake_running(project_code, workflow_code):
+            return busy
+
+        with mock.patch.object(module, "get_running_instances_by_workflow", side_effect=fake_running), \
+            mock.patch.object(module, "log"), \
+            mock.patch.object(module.time, "time", side_effect=[1000.0, 1000.0, 1006.0]), \
+            mock.patch.object(module.time, "sleep"):
+            ok, remaining = module.wait_until_workflow_idle("p", "wf-1", poll_interval=300, max_wait=5)
+        self.assertFalse(ok)
+        self.assertEqual(remaining, busy)
+
+    def test_wait_until_workflow_idle_uses_five_minute_default_interval(self):
+        module = load_module()
+        self.assertEqual(module.REPAIR_IDLE_POLL_INTERVAL_SECONDS, 300)
+        self.assertEqual(module.REPAIR_IDLE_WAIT_MAX_SECONDS, 0)
 
     def test_execute_repairs_in_batches_serializes_tasks_in_same_workflow(self):
         module = load_module()
@@ -1696,12 +1746,12 @@ class RepairStrict7StepTests(unittest.TestCase):
         ]
 
         with mock.patch.object(module, "ds_api_post") as mocked_post, \
-            mock.patch.object(module, "find_conflicting_running_instance") as mocked_conflict, \
+            mock.patch.object(module, "get_running_instances_by_workflow") as mocked_busy, \
             mock.patch.object(module, "log"):
             results, running_instances = module.step3_start_repair(tasks)
 
         mocked_post.assert_not_called()
-        mocked_conflict.assert_not_called()
+        mocked_busy.assert_not_called()
         self.assertEqual(running_instances, [])
         self.assertEqual(results[0]["status"], "skipped_manual_review")
         self.assertIn("人工处理", results[0]["error"])

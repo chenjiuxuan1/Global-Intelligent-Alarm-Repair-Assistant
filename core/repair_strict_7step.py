@@ -60,6 +60,9 @@ BLOCKED_FUYAN_WORKFLOW_NAMES = {
 DS_STATUS_DEBUG = os.environ.get('REPAIR_DEBUG_DS_STATUS', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 REPAIR_WORKFLOW_CONFLICT_POLL_INTERVAL_SECONDS = int(os.environ.get('REPAIR_WORKFLOW_CONFLICT_POLL_INTERVAL_SECONDS', '30'))
 REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS = int(os.environ.get('REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS', '1800'))
+# 工作流实例区域有任务在跑时不执行修复：按固定间隔轮询等待空闲后再启动
+REPAIR_IDLE_POLL_INTERVAL_SECONDS = int(os.environ.get('REPAIR_IDLE_POLL_INTERVAL_SECONDS', '300'))
+REPAIR_IDLE_WAIT_MAX_SECONDS = int(os.environ.get('REPAIR_IDLE_WAIT_MAX_SECONDS', '0'))
 FAILED_STATE_CONFIRMATION_GRACE_SECONDS = int(os.environ.get('FAILED_STATE_CONFIRMATION_GRACE_SECONDS', '45'))
 FAILED_STATE_CONFIRMATION_MAX_RECHECKS = int(os.environ.get('FAILED_STATE_CONFIRMATION_MAX_RECHECKS', '5'))
 WORKFLOW_CODE_ROOT = os.environ.get('WORKFLOW_CODE_ROOT', '/data/git/starrocks/workflow').strip()
@@ -893,6 +896,50 @@ def wait_for_workflow_conflict_clear(project_code, workflow_code, poll_interval=
         time.sleep(poll_interval)
 
 
+def build_workflow_idle_wait_timeout_error(busy_instances):
+    """为等待工作流实例区域空闲超时生成人工处理说明。"""
+    busy_instances = busy_instances or []
+    count = len(busy_instances)
+    first = busy_instances[0] if busy_instances else {}
+    instance_id = first.get('id', '未知')
+    state = first.get('state') or 'UNKNOWN'
+    return (
+        f"等待工作流实例区域空闲超时，仍有 {count} 个运行中实例，转人工处理 "
+        f"(实例ID: {instance_id}, 状态: {state})"
+    )
+
+
+def wait_until_workflow_idle(project_code, workflow_code, poll_interval=None, max_wait=None):
+    """工作流实例区域有任务在跑时不执行修复：每 poll_interval 秒轮询一次，
+    直到该工作流无运行中实例（空闲）才放行。max_wait<=0 表示一直等待到空闲。"""
+    if poll_interval is None:
+        poll_interval = REPAIR_IDLE_POLL_INTERVAL_SECONDS
+    if max_wait is None:
+        max_wait = REPAIR_IDLE_WAIT_MAX_SECONDS
+
+    start_time = time.time()
+    last_busy = None
+
+    while True:
+        busy_instances = get_running_instances_by_workflow(project_code, workflow_code)
+        if not busy_instances:
+            return True, None
+
+        last_busy = busy_instances
+        elapsed = int(time.time() - start_time)
+        if max_wait > 0 and elapsed >= max_wait:
+            return False, last_busy
+
+        instance_ids = ', '.join(str(item.get('id', '?')) for item in busy_instances[:5])
+        if len(busy_instances) > 5:
+            instance_ids += f" 等{len(busy_instances)}个"
+        log(
+            f"  ⏳ 工作流实例区域仍有任务在跑 (实例ID: {instance_ids})，"
+            f"每{poll_interval}秒检查一次是否空闲，已等待 {elapsed}s，空闲后再执行修复"
+        )
+        time.sleep(poll_interval)
+
+
 def is_workflow_scheduled(workflow_code, schedule_map):
     """判断工作流是否挂了定时调度"""
     return str(workflow_code) in schedule_map
@@ -1542,8 +1589,10 @@ def step2_search_in_workflow(workflow_code, table_name, visited=None, is_subwork
     if child_candidates:
         return _select_runnable_candidate(child_candidates)
 
-    # 仅允许叶子子工作流中的目标表节点运行。
-    if not is_subworkflow or child_workflow_codes:
+    # 仅允许“叶子”工作流直接运行其内部目标表节点：
+    # 含子流程节点的工作流视为编排父工作流，不直接运行内部节点（避免 TASK_ONLY 空跑）；
+    # 顶层无子节点的叶子工作流（如印尼 ods_contractsvr_contract 所在工作流）可直接命中。
+    if child_workflow_codes:
         return None
 
     candidates = []
@@ -2101,20 +2150,18 @@ def step3_start_repair(tasks):
         log(f"  工作流: {task['workflow_name']}")
         log(f"  任务: {task['task_name']}")
 
-        conflict_instance = find_conflicting_running_instance(PROJECT_CODE, workflow_code)
-        if conflict_instance:
-            wait_success, remaining_conflict = wait_for_workflow_conflict_clear(
-                PROJECT_CODE,
-                workflow_code,
-            )
+        # 工作流实例区域有任务在跑时不执行修复：每5分钟轮询检查，空闲后再启动
+        busy_instances = get_running_instances_by_workflow(PROJECT_CODE, workflow_code)
+        if busy_instances:
+            wait_success, remaining_busy = wait_until_workflow_idle(PROJECT_CODE, workflow_code)
             if not wait_success:
-                error_msg = build_conflicting_instance_error(remaining_conflict or conflict_instance)
-                log(f"  ⏭️ 等待超时，跳过启动: {error_msg}")
+                error_msg = build_workflow_idle_wait_timeout_error(remaining_busy or busy_instances)
+                log(f"  ⏭️ 等待工作流实例区域空闲超时，跳过启动: {error_msg}")
                 task['status'] = 'failed'
                 task['error'] = error_msg
                 results.append(task)
                 continue
-            log("  ✅ 同工作流运行实例已结束，继续启动当前任务")
+            log("  ✅ 工作流实例区域已空闲，继续启动当前任务")
         
         base_data = {
             'startNodeList': task_code,
