@@ -259,6 +259,21 @@ TABLE_CONFIG = {
     "quality_alert_table": _get_env("QUALITY_ALERT_TABLE", "wattrel_quality_alert"),
 }
 
+# Non-CN alert intake queue.  The queue is deliberately opt-in so the already
+# online repair flow is unchanged until each country's SR testdb is configured.
+TESTDB_ALERT_CONFIG = {
+    "enabled": _get_env("TESTDB_ALERT_QUEUE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
+    "host": _get_env("SR_TESTDB_HOST", ""),
+    "port": int(_get_env("SR_TESTDB_PORT", "9030")),
+    "user": _get_env("SR_TESTDB_USER", ""),
+    "password": _get_env("SR_TESTDB_PASSWORD", ""),
+    "database": _get_env("SR_TESTDB_DATABASE", "testdb"),
+    "table": _get_env("TESTDB_ALERT_QUEUE_TABLE", "intelligent_alarm_alert_queue"),
+    "ai_webhook_url": _get_env("AI_ROOT_CAUSE_WEBHOOK_URL", ""),
+    "ai_webhook_token": _get_env("AI_ROOT_CAUSE_WEBHOOK_TOKEN", ""),
+    "ai_timeout_seconds": int(_get_env("AI_ROOT_CAUSE_TIMEOUT_SECONDS", "30")),
+}
+
 
 REPAIR_CONFIG = {
     "scan_lookback_days": int(_get_env("SCAN_LOOKBACK_DAYS", "8")),

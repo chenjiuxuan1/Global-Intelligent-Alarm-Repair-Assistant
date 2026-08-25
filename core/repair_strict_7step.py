@@ -2967,6 +2967,17 @@ def send_tv_report_to_dingtalk(report_content):
 
 def main():
     """主函数"""
+    # Optional audit write only. The master repair and recheck paths remain unchanged.
+    from config.config import TESTDB_ALERT_CONFIG
+    if TESTDB_ALERT_CONFIG["enabled"]:
+        from core import testdb_alert_queue
+        if testdb_alert_queue.enabled():
+            try:
+                testdb_alert_queue.persist_current_alerts()
+            except Exception as error:
+                # Audit delivery must never prevent the existing repair flow.
+                log(f"⚠️ testdb 告警审计写入失败，继续执行原修复流程: {error}")
+
     log("="*70)
     log("🚀 智能告警修复流程（v5.2 最终修复版）")
     log("="*70)

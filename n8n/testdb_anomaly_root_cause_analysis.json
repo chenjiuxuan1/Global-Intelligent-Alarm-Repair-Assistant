@@ -1,0 +1,69 @@
+{
+  "name": "Testdb 长期异常根因时间定位",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "testdb-anomaly-root-cause", "responseMode": "responseNode", "options": {} },
+      "id": "1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst required = ['country', 'source_table', 'comparison_table', 'data_date', 'diff'];\nconst missing = required.filter((key) => input[key] === undefined || input[key] === null || input[key] === '');\nif (missing.length) throw new Error(`Missing required fields: ${missing.join(', ')}`);\nconst prompt = `You are a data-quality root-cause analyst. Analyze only the metadata below. Use source_sql and comparison_sql to identify the actual time predicates; begin/data_date is the start of the checked business-data interval, while an end timestamp may be the task cutoff and is not necessarily a midnight boundary. Identify the most likely start_date and end_date of the anomaly, explain evidence and confidence, and suggest one precise rerun date. If the evidence cannot establish a date boundary, use null and state the missing evidence. Do not execute SQL, do not invent table contents, do not call any external system. Return JSON only with keys: start_date, end_date, recommended_rerun_date, confidence, reasoning, evidence_needed.\\n\\nMetadata:\\n${JSON.stringify(input)}`;\nreturn [{ json: { input, prompt } }];"
+      },
+      "id": "2",
+      "name": "Build Root-Cause Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.QWEN_CHAT_API_URL }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "Authorization", "value": "=Bearer {{ $env.QWEN_API_KEY }}" }, { "name": "Content-Type", "value": "application/json" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { model: $env.QWEN_MODEL || 'qwen-plus', temperature: 0, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: 'Return valid JSON only. Never execute SQL or initiate workflows.' }, { role: 'user', content: $json.prompt } ] } }}",
+        "options": {}
+      },
+      "id": "3",
+      "name": "Call Qwen Chat API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices?.[0]?.message?.content ?? $json.output_text ?? $json.text ?? JSON.stringify($json);\nlet analysis;\ntry { analysis = typeof raw === 'string' ? JSON.parse(raw.replace(/^```json\\s*|\\s*```$/g, '')) : raw; } catch { analysis = { reasoning: String(raw), confidence: 'unknown', evidence_needed: ['AI response was not valid JSON'] }; }\nconst iso = /^\\d{4}-\\d{2}-\\d{2}$/;\nfor (const key of ['start_date', 'end_date', 'recommended_rerun_date']) { if (analysis[key] && !iso.test(String(analysis[key]))) analysis[key] = null; }\nreturn [{ json: { status: 'complete', analysis } }];"
+      },
+      "id": "4",
+      "name": "Parse AI Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 0]
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={{ $json }}", "options": {} },
+      "id": "5",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1020, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [ [ { "node": "Build Root-Cause Prompt", "type": "main", "index": 0 } ] ] },
+    "Build Root-Cause Prompt": { "main": [ [ { "node": "Call Qwen Chat API", "type": "main", "index": 0 } ] ] },
+    "Call Qwen Chat API": { "main": [ [ { "node": "Parse AI Result", "type": "main", "index": 0 } ] ] },
+    "Parse AI Result": { "main": [ [ { "node": "Respond to Webhook", "type": "main", "index": 0 } ] ] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "testdb-root-cause-v1",
+  "meta": { "templateCredsSetupCompleted": false },
+  "tags": []
+}

@@ -39,6 +39,7 @@ def load_module():
         "quality_result_table": "default_quality_result",
         "quality_alert_table": "default_quality_alert",
     }
+    fake_config_config.TESTDB_ALERT_CONFIG = {"enabled": False}
     fake_config_config.REPAIR_CONFIG = {
         "scan_lookback_days": 8,
         "priority_workflow_codes": [],
