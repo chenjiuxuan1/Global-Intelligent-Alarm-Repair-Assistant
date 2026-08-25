@@ -272,6 +272,12 @@ TESTDB_ALERT_CONFIG = {
     "ai_webhook_url": _get_env("AI_ROOT_CAUSE_WEBHOOK_URL", ""),
     "ai_webhook_token": _get_env("AI_ROOT_CAUSE_WEBHOOK_TOKEN", ""),
     "ai_timeout_seconds": int(_get_env("AI_ROOT_CAUSE_TIMEOUT_SECONDS", "30")),
+    # Long-history (90d/1y) time location is deliberately opt-in.  The
+    # configured client is the SR Box CLI and uses its own SSO session.
+    "srbox_time_location_enabled": _get_env("SRBOX_TIME_LOCATION_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
+    "srbox_client_path": _get_env("SRBOX_CLIENT_PATH", ""),
+    "srbox_query_timeout_seconds": int(_get_env("SRBOX_QUERY_TIMEOUT_SECONDS", "60")),
+    "srbox_max_result_rows": int(_get_env("SRBOX_MAX_RESULT_ROWS", "400")),
 }
 
 

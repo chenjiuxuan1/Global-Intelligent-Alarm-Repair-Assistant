@@ -11,7 +11,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nconst required = ['country', 'source_table', 'comparison_table', 'data_date', 'diff'];\nconst missing = required.filter((key) => input[key] === undefined || input[key] === null || input[key] === '');\nif (missing.length) throw new Error(`Missing required fields: ${missing.join(', ')}`);\nconst prompt = `You are a data-quality root-cause analyst. Analyze only the metadata below. Use source_sql and comparison_sql to identify the actual time predicates; begin/data_date is the start of the checked business-data interval, while an end timestamp may be the task cutoff and is not necessarily a midnight boundary. Identify the most likely start_date and end_date of the anomaly, explain evidence and confidence, and suggest one precise rerun date. If the evidence cannot establish a date boundary, use null and state the missing evidence. Do not execute SQL, do not invent table contents, do not call any external system. Return JSON only with keys: start_date, end_date, recommended_rerun_date, confidence, reasoning, evidence_needed.\\n\\nMetadata:\\n${JSON.stringify(input)}`;\nreturn [{ json: { input, prompt } }];"
+        "jsCode": "const input = $input.first().json;\nconst phase = input.phase;\nif (!['build_probe', 'locate_precise_time'].includes(phase)) throw new Error('Unsupported phase');\nlet prompt;\nif (phase === 'build_probe') {\n  const required = ['country', 'source_sql', 'comparison_sql', 'data_date'];\n  const missing = required.filter((key) => !input[key]);\n  if (missing.length) throw new Error(`Missing required fields: ${missing.join(', ')}`);\n  prompt = `You are a data-quality analyst. Build a measurement plan only; do not execute SQL. Based exclusively on source_sql and comparison_sql below, return JSON with source_probe_sql, comparison_probe_sql, bucket_granularity, rationale. Each SQL must be exactly one read-only SELECT/WITH aggregate using only the table(s) already present in its corresponding original SQL, preserve a bounded time predicate within the original time interval, aggregate by the original time field, and return at most 400 time buckets. Do not use semicolons, DDL, DML, comments, or any new table. Use COUNT or the same aggregate as the original metric.\\n\\nInput:\\n${JSON.stringify(input)}`;\n} else {\n  prompt = `You are a data-quality analyst. Determine the precise first anomalous business timestamp using only the two SRBox read-only aggregate results below. Do not execute SQL and do not invent data. Return JSON only with precise_anomaly_time (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS, or null), confidence, reasoning, evidence_needed. If the probe does not establish a first time, return null.\\n\\nInput:\\n${JSON.stringify(input)}`;\n}\nreturn [{ json: { input, prompt } }];"
       },
       "id": "2",
       "name": "Build Root-Cause Prompt",
@@ -38,7 +38,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const raw = $json.choices?.[0]?.message?.content ?? $json.output_text ?? $json.text ?? JSON.stringify($json);\nlet analysis;\ntry { analysis = typeof raw === 'string' ? JSON.parse(raw.replace(/^```json\\s*|\\s*```$/g, '')) : raw; } catch { analysis = { reasoning: String(raw), confidence: 'unknown', evidence_needed: ['AI response was not valid JSON'] }; }\nconst iso = /^\\d{4}-\\d{2}-\\d{2}$/;\nfor (const key of ['start_date', 'end_date', 'recommended_rerun_date']) { if (analysis[key] && !iso.test(String(analysis[key]))) analysis[key] = null; }\nreturn [{ json: { status: 'complete', analysis } }];"
+        "jsCode": "const input = $item(0).$node['Build Root-Cause Prompt'].json.input;\nconst raw = $json.choices?.[0]?.message?.content ?? $json.output_text ?? $json.text ?? JSON.stringify($json);\nlet analysis;\ntry { analysis = typeof raw === 'string' ? JSON.parse(raw.replace(/^```json\\s*|\\s*```$/g, '')) : raw; } catch { analysis = { reasoning: String(raw), confidence: 'unknown', evidence_needed: ['AI response was not valid JSON'] }; }\nif (input.phase === 'locate_precise_time') { const valid = /^\\d{4}-\\d{2}-\\d{2}(?:[ T]\\d{2}:\\d{2}:\\d{2})?$/; if (analysis.precise_anomaly_time && !valid.test(String(analysis.precise_anomaly_time))) analysis.precise_anomaly_time = null; }\nreturn [{ json: { status: 'complete', phase: input.phase, analysis } }];"
       },
       "id": "4",
       "name": "Parse AI Result",
@@ -63,7 +63,7 @@
   },
   "active": false,
   "settings": { "executionOrder": "v1" },
-  "versionId": "testdb-root-cause-v1",
+  "versionId": "testdb-root-cause-v2-srbox-probe",
   "meta": { "templateCredsSetupCompleted": false },
   "tags": []
 }

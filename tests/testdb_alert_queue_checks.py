@@ -22,20 +22,31 @@ class TestdbAlertQueueChecks(unittest.TestCase):
         row = {"id": 1, "src_tbl": "source", "dest_tbl": "target", "end": now}
         self.assertEqual(queue.audit_key(row, now), queue.audit_key(row, now))
 
-    def test_ai_is_called_only_for_long_history_alerts(self):
+    def test_ai_uses_validated_srbox_probes_only_for_long_history_alerts(self):
         now = datetime.now()
         config = dict(queue.TESTDB_ALERT_CONFIG)
-        config.update({"ai_webhook_url": "https://n8n.example/webhook/test", "ai_webhook_token": "token", "ai_timeout_seconds": 5})
-        response = mock.MagicMock()
-        response.read.return_value = b'{"recommended_rerun_date":"2026-01-01"}'
-        context = mock.MagicMock()
-        context.__enter__.return_value = response
-        with mock.patch.object(queue, "TESTDB_ALERT_CONFIG", config), mock.patch("urllib.request.urlopen", return_value=context) as urlopen:
-            status, analysis, error = queue.analyze_long_anomaly({"end": now - timedelta(days=10), "src_tbl": "a", "dest_tbl": "b", "diff": 1}, now, [])
+        config.update({"ai_webhook_url": "https://n8n.example/webhook/test", "srbox_time_location_enabled": True, "srbox_client_path": "client.py"})
+        row = {
+            "begin": now - timedelta(days=10), "src_tbl": "a", "dest_tbl": "b", "diff": 1,
+            "src_sql": "SELECT COUNT(*) FROM db.a WHERE dt >= '2026-01-01' AND dt < '2026-01-02'",
+            "dest_sql": "SELECT COUNT(*) FROM db.b WHERE dt >= '2026-01-01' AND dt < '2026-01-02'",
+        }
+        plan = {"source_probe_sql": "SELECT COUNT(*) FROM db.a WHERE dt >= '2026-01-01' AND dt < '2026-01-02'", "comparison_probe_sql": "SELECT COUNT(*) FROM db.b WHERE dt >= '2026-01-01' AND dt < '2026-01-02'"}
+        conclusion = {"precise_anomaly_time": "2026-01-01", "confidence": "high"}
+        with mock.patch.object(queue, "TESTDB_ALERT_CONFIG", config), mock.patch.object(queue, "_post_ai", side_effect=[plan, conclusion]) as post_ai, mock.patch.object(queue, "_run_srbox_probe", return_value={"rows": []}) as probe:
+            status, analysis, error = queue.analyze_long_anomaly(row, now, [])
             self.assertEqual((status, error), ("complete", ""))
-            self.assertIn("recommended_rerun_date", analysis)
+            self.assertIn("precise_anomaly_time", analysis)
             self.assertEqual(queue.analyze_long_anomaly({"end": now - timedelta(days=2)}, now, [])[0], "disabled")
-        urlopen.assert_called_once()
+        self.assertEqual(post_ai.call_count, 2)
+        self.assertEqual(probe.call_count, 2)
+
+    def test_probe_sql_rejects_writes_and_unknown_tables(self):
+        row = {"src_sql": "SELECT COUNT(*) FROM db.a WHERE dt >= '2026-01-01' AND dt < '2026-01-02'", "dest_sql": "SELECT COUNT(*) FROM db.b WHERE dt >= '2026-01-01' AND dt < '2026-01-02'"}
+        self.assertTrue(queue._valid_probe_sql("SELECT COUNT(*) FROM db.a WHERE dt >= '2026-01-01' AND dt < '2026-01-02'", row))
+        self.assertFalse(queue._valid_probe_sql("DELETE FROM db.a", row))
+        self.assertFalse(queue._valid_probe_sql("SELECT COUNT(*) FROM db.secret WHERE dt >= '2026-01-01' AND dt < '2026-01-02'", row))
+        self.assertFalse(queue._valid_probe_sql("SELECT COUNT(*) FROM db.a WHERE dt >= '2025-01-01' AND dt < '2025-01-02'", row))
 
 
 if __name__ == "__main__":

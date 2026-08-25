@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import re
+import subprocess
+import sys
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
@@ -51,11 +53,21 @@ def ensure_table(conn):
       data_date DATETIME, entered_testdb_at DATETIME,
       data_diff DECIMAL(38,6), alert_class VARCHAR(16), diff_label TINYINT,
       status VARCHAR(32), ai_analysis VARCHAR(8192), ai_status VARCHAR(32),
-      ai_error VARCHAR(1024), updated_at DATETIME
+      ai_error VARCHAR(1024), precise_anomaly_time DATETIME,
+      ai_probe_status VARCHAR(32), ai_probe_evidence VARCHAR(8192), updated_at DATETIME
     ) ENGINE=OLAP PRIMARY KEY(audit_key)
     DISTRIBUTED BY HASH(audit_key) BUCKETS 1 PROPERTIES ("replication_num"="1")'''
     with conn.cursor() as cur:
         cur.execute(sql)
+        cur.execute(f"SHOW COLUMNS FROM {table}")
+        columns = {str(item.get("Field") or item.get("field") or "").lower() for item in cur.fetchall()}
+        for name, definition in (
+            ("precise_anomaly_time", "DATETIME"),
+            ("ai_probe_status", "VARCHAR(32)"),
+            ("ai_probe_evidence", "VARCHAR(8192)"),
+        ):
+            if name not in columns:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
     conn.commit()
 
 
@@ -112,11 +124,76 @@ def audit_key(row, now):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _post_ai(payload):
+    """Call the n8n endpoint; it returns advice only and never executes jobs."""
+    headers = {"Content-Type": "application/json"}
+    if TESTDB_ALERT_CONFIG["ai_webhook_token"]:
+        headers["Authorization"] = "Bearer " + TESTDB_ALERT_CONFIG["ai_webhook_token"]
+    request = urllib.request.Request(TESTDB_ALERT_CONFIG["ai_webhook_url"], data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    with urllib.request.urlopen(request, timeout=TESTDB_ALERT_CONFIG["ai_timeout_seconds"]) as response:
+        body = response.read().decode("utf-8", errors="replace")
+    decoded = json.loads(body)
+    return decoded.get("analysis", decoded) if isinstance(decoded, dict) else decoded
+
+
+def _srbox_country():
+    return {"ine": "id"}.get(COUNTRY, COUNTRY)
+
+
+def _source_relations(sql):
+    return {match.group(1).strip("`").lower() for match in re.finditer(r"\b(?:from|join)\s+([`\w.]+)", str(sql or ""), re.I)}
+
+
+def _valid_probe_sql(sql, row):
+    """Allow only a bounded aggregate read of tables named by the alert SQL."""
+    text = str(sql or "").strip()
+    if not re.match(r"^(?:with\b|select\b)", text, re.I) or ";" in text:
+        return False
+    if re.search(r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|call|set|show|desc)\b", text, re.I):
+        return False
+    if not re.search(r"\b(count|sum)\s*\(", text, re.I):
+        return False
+    allowed = _source_relations(row.get("src_sql")) | _source_relations(row.get("dest_sql"))
+    used = _source_relations(text)
+    probe_days = re.findall(r"\d{4}-\d{2}-\d{2}", text)
+    original_days = re.findall(r"\d{4}-\d{2}-\d{2}", str(row.get("src_sql") or "") + " " + str(row.get("dest_sql") or ""))
+    if len(probe_days) < 2 or not original_days:
+        return False
+    return bool(used) and used.issubset(allowed) and min(probe_days) >= min(original_days) and max(probe_days) <= max(original_days)
+
+
+def _run_srbox_probe(sql):
+    client = TESTDB_ALERT_CONFIG["srbox_client_path"]
+    if not client or not os.path.isfile(client):
+        raise ValueError("SRBOX_CLIENT_PATH is not a readable sr_gateway_client.py")
+    completed = subprocess.run(
+        [sys.executable, client, "execute", "--country", _srbox_country(), "--task-name",
+         "testdb-anomaly-time-probe", "--page-size", str(TESTDB_ALERT_CONFIG["srbox_max_result_rows"]),
+         "--timeout-sec", str(TESTDB_ALERT_CONFIG["srbox_query_timeout_seconds"]), "--sql", sql],
+        check=False, capture_output=True, text=True,
+        timeout=TESTDB_ALERT_CONFIG["srbox_query_timeout_seconds"] + 15,
+    )
+    if completed.returncode:
+        raise RuntimeError((completed.stderr or completed.stdout or "SRBox query failed")[:1024])
+    return json.loads(completed.stdout)
+
+
+def _precise_time(value):
+    if not value:
+        return None
+    return repair.normalize_to_datetime(value)
+
+
 def analyze_long_anomaly(row, now, observations):
-    """Ask n8n/AI for an advisory date range; it cannot run SQL or DS tasks."""
-    if alert_class(row, now) not in {"90d", "1y"} or not TESTDB_ALERT_CONFIG["ai_webhook_url"]:
+    """Use AI-planned, SRBox-read-only probes to locate 90d/1y anomalies."""
+    if alert_class(row, now) not in {"90d", "1y"}:
         return "disabled", "", ""
+    if not TESTDB_ALERT_CONFIG["ai_webhook_url"]:
+        return "disabled", "", "AI_ROOT_CAUSE_WEBHOOK_URL is not configured"
+    if not TESTDB_ALERT_CONFIG["srbox_time_location_enabled"]:
+        return "disabled", "", "SRBOX_TIME_LOCATION_ENABLED is false"
     payload = {
+        "phase": "build_probe",
         "country": COUNTRY,
         "source_database": _value(row, "src_db"),
         "comparison_database": _value(row, "dest_db"),
@@ -132,16 +209,29 @@ def analyze_long_anomaly(row, now, observations):
         "data_date": data_date(row, now).strftime("%Y-%m-%d"),
         "alert_class": alert_class(row, now),
         "observations": observations,
-        "instruction": "Locate the most likely anomaly start/end date from the supplied metadata. Return JSON only; do not execute SQL or start jobs.",
+        "instruction": "Return only a bounded read-only aggregate probe plan; it will be validated and run by the application through SRBox.",
     }
-    headers = {"Content-Type": "application/json"}
-    if TESTDB_ALERT_CONFIG["ai_webhook_token"]:
-        headers["Authorization"] = "Bearer " + TESTDB_ALERT_CONFIG["ai_webhook_token"]
     try:
-        request = urllib.request.Request(TESTDB_ALERT_CONFIG["ai_webhook_url"], data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(request, timeout=TESTDB_ALERT_CONFIG["ai_timeout_seconds"]) as response:
-            return "complete", response.read().decode("utf-8", errors="replace")[:8192], ""
-    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        plan = _post_ai(payload)
+        source_probe = plan.get("source_probe_sql") if isinstance(plan, dict) else None
+        comparison_probe = plan.get("comparison_probe_sql") if isinstance(plan, dict) else None
+        if not _valid_probe_sql(source_probe, row) or not _valid_probe_sql(comparison_probe, row):
+            return "rejected", "", "AI probe SQL did not pass the read-only/table-bound validation"
+        source_result = _run_srbox_probe(source_probe)
+        comparison_result = _run_srbox_probe(comparison_probe)
+        conclusion = _post_ai({
+            "phase": "locate_precise_time", "country": COUNTRY,
+            "data_date": data_date(row, now).strftime("%Y-%m-%d"),
+            "alert_class": alert_class(row, now), "diff": row.get("diff"),
+            "probe_plan": plan, "source_probe_result": source_result,
+            "comparison_probe_result": comparison_result,
+        })
+        precise = _precise_time(conclusion.get("precise_anomaly_time") if isinstance(conclusion, dict) else None)
+        result = dict(conclusion) if isinstance(conclusion, dict) else {"raw": str(conclusion)}
+        result["precise_anomaly_time"] = precise.isoformat(sep=" ") if precise else None
+        result["probe_plan"] = plan
+        return "complete", json.dumps(result, ensure_ascii=False)[:8192], ""
+    except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError, subprocess.SubprocessError, json.JSONDecodeError) as error:
         return "error", "", str(error)[:1024]
 
 
@@ -163,7 +253,7 @@ def persist_current_alerts():
     try:
         ensure_table(conn)
         table = _identifier(TESTDB_ALERT_CONFIG["table"])
-        sql = f"""INSERT INTO {table} (audit_key,alert_id,source_database,comparison_database,source_table,comparison_table,metric_name,metric_description,source_sql,comparison_sql,source_value,comparison_value,data_date,entered_testdb_at,data_diff,alert_class,diff_label,status,ai_analysis,ai_status,ai_error,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+        sql = f"""INSERT INTO {table} (audit_key,alert_id,source_database,comparison_database,source_table,comparison_table,metric_name,metric_description,source_sql,comparison_sql,source_value,comparison_value,data_date,entered_testdb_at,data_diff,alert_class,diff_label,status,ai_analysis,ai_status,ai_error,precise_anomaly_time,ai_probe_status,ai_probe_evidence,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
         with conn.cursor() as cur:
             for row in source_rows():
                 key = audit_key(row, now)
@@ -190,11 +280,16 @@ def persist_current_alerts():
                     "comparison_value": _json_safe(_value(row, "dest_value", "dest_count")),
                 })
                 ai_status, ai_analysis, ai_error = analyze_long_anomaly(row, now, observations)
+                precise_time = None
+                try:
+                    precise_time = _precise_time(json.loads(ai_analysis).get("precise_anomaly_time")) if ai_analysis else None
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    pass
                 cur.execute(sql, (key, _value(row, "id"), _value(row, "src_db"), _value(row, "dest_db"), _value(row, "src_tbl"), _value(row, "dest_tbl"),
                     row.get("name"), row.get("desc"), row.get("src_sql"), row.get("dest_sql"),
                     _json_safe(_value(row, "src_value", "src_count")), _json_safe(_value(row, "dest_value", "dest_count")),
                     data_date(row, now), now, row.get("diff"), alert_class(row, now), diff_label(row), "recorded",
-                    ai_analysis, ai_status, ai_error, now))
+                    ai_analysis, ai_status, ai_error, precise_time, ai_status, ai_analysis, now))
         conn.commit()
     finally:
         conn.close()
