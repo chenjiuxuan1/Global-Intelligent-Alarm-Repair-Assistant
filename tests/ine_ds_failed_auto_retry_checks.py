@@ -1325,6 +1325,50 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(task_name, "最新失败任务")
         self.assertIn("task instance 200 failed", reason)
 
+    def test_failed_task_lookup_reads_later_pages_for_large_workflow(self):
+        requested_pages = []
+
+        def gateway(action, token, payload, request_id):
+            if action == "list_task_instances":
+                page_no = payload.get("page_no", 1)
+                requested_pages.append(page_no)
+                tasks = (
+                    [{"id": index, "name": f"成功任务{index}", "state": "SUCCESS"} for index in range(1, 101)]
+                    if page_no == 1
+                    else [{"id": 101, "name": "PK后续页失败任务", "state": "FAILURE"}]
+                )
+                return {
+                    "ok": True,
+                    "stdout": {
+                        "success": True,
+                        "data": {
+                            "data": {
+                                "total": 101,
+                                "pageNo": page_no,
+                                "pageSize": 100,
+                                "totalList": tasks,
+                            }
+                        },
+                    },
+                }
+            if action == "get_task_log":
+                return {
+                    "ok": True,
+                    "stdout": {"data": {"log": "ERROR - PK worker connection reset"}},
+                }
+            raise AssertionError(f"unexpected action: {action}")
+
+        reason, task_name = generic_retry.fetch_failure_info_from_task_log(
+            {"project_code": "169585666733760", "instance_id": "2494845"},
+            "token",
+            "pk-paged-task",
+            gateway,
+        )
+
+        self.assertEqual(requested_pages, [1, 2])
+        self.assertEqual(task_name, "PK后续页失败任务")
+        self.assertIn("connection reset", reason)
+
     def test_extract_task_log_reason_filters_wrapper_only_log(self):
         """Wrapper-only logs must say the task omitted its underlying exception."""
         log_text = (
