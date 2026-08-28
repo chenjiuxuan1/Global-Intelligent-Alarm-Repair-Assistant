@@ -1197,6 +1197,23 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertEqual(task_name, "最新任务")
         self.assertIn("killed by kill statement", reason)
 
+    def test_summarize_extracts_nonzero_exit_value_without_error_log_level(self):
+        log_text = (
+            "2026-08-28 05:42:20.000 INFO  -  -> command completed\n"
+            "2026-08-28 05:42:21.000 INFO  -  -> Process exited with exit value 127"
+        )
+
+        reason = generic_retry._summarize_task_log(log_text)
+
+        self.assertEqual(reason, "Process exited with exit value 127")
+
+    def test_summarize_extracts_sqlstate_without_error_log_level(self):
+        log_text = "2026-08-28 05:42:21.000 INFO  -  -> 1064 (HY000): table does not exist"
+
+        reason = generic_retry._summarize_task_log(log_text)
+
+        self.assertEqual(reason, "1064 (HY000): table does not exist")
+
     def test_failed_task_log_requests_enough_lines_to_reach_trailing_error(self):
         """The fallback log/detail request must not stop at the first 2,000 SQL lines."""
         seen_limits = []
@@ -1264,7 +1281,7 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertIn("task instance 200 failed", reason)
 
     def test_extract_task_log_reason_filters_wrapper_only_log(self):
-        """When the only error line is 'run etl fail', return empty (not the wrapper)."""
+        """Wrapper-only logs must say the task omitted its underlying exception."""
         log_text = (
             "2026-08-03 18:25:20.000 INFO  -  -> starting etl\n"
             "2026-08-03 18:25:27.026 INFO  -  -> 2026-08-03 18:25:27,026 - console - "
@@ -1272,7 +1289,7 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         )
         response = {"stdout": {"success": True, "data": {"log": log_text}}}
         reason = generic_retry.extract_task_log_failure_reason(response)
-        self.assertEqual(reason, "")
+        self.assertEqual(reason, "任务日志仅记录通用失败标记，任务脚本未输出底层异常")
 
     def test_extract_task_log_reason_finds_real_error_before_wrapper(self):
         """Full gateway response: real error must win over the 'run etl fail' wrapper."""

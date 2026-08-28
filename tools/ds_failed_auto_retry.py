@@ -668,6 +668,30 @@ def _summarize_task_log(value: Any) -> str:
                 continue
             return line[:1000]
 
+    # Some PK jobs emit neither an ERROR log level nor an Exception class.
+    # Preserve only structured failure evidence here; never fall back to an
+    # arbitrary final line because a paged task log may end inside SQL text.
+    structured_failure = re.compile(
+        r"(?:"
+        r"\b(?:process\s+)?(?:exit(?:ed)?|return)\s*(?:value|code|status)?\s*[:=]?\s*[1-9]\d*\b|"
+        r"\b(?:sqlstate|error\s*code|errcode)\s*[:=\[]\s*[A-Z0-9_-]+|"
+        r"\([A-Z0-9]{5}\)\s*:\s*\S|"
+        r"\b(?:failure\s+reason|reason|message|msg)\s*[:=]\s*\S+"
+        r")",
+        flags=re.IGNORECASE,
+    )
+    for line in reversed(lines):
+        if _is_failure_wrapper_reason(line):
+            continue
+        if structured_failure.search(line):
+            return line[:1000]
+
+    # A wrapper-only log was fetched successfully, but the task launcher did
+    # not print its underlying exception.  Report that distinction instead of
+    # incorrectly saying that no reason could be parsed from DS details.
+    if any(_is_failure_wrapper_reason(line) for line in lines):
+        return "任务日志仅记录通用失败标记，任务脚本未输出底层异常"
+
     # No explicit error evidence means this may be a truncated SQL/script page.
     # Returning its last line creates false reasons such as ``MAX(IF(...))``.
     return ""
