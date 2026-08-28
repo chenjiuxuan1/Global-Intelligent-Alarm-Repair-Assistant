@@ -340,6 +340,52 @@ class PkSadapayDwdPushAlertTests(unittest.TestCase):
         self.assertEqual(metrics["summary"]["读出记录总数"], "3")
         self.assertEqual(metrics["summary"]["读写失败总数"], "0")
 
+    def test_collect_metrics_falls_back_when_latest_instance_lacks_task(self):
+        """最新实例只含校验触发、不含数据推送任务时，回退到最近含数据推送任务的实例。"""
+        from alert.pk_sadapay_dwd_push_monitor_alert import collect_metrics
+
+        def fake_call_gateway(action, payload, **kwargs):
+            if action == "resolve_project":
+                return {"project_code": "177549275623072"}
+            if action == "list_workflows":
+                return {"data": {"totalList": [{"code": 179573193891808, "name": "DWD"}]}}
+            if action == "list_instances":
+                return {
+                    "data": {
+                        "totalList": [
+                            {"id": 2503781, "workflowDefinitionCode": 179573193891808,
+                             "startTime": "2026-08-28 16:36:42"},
+                            {"id": 2501908, "workflowDefinitionCode": 179573193891808,
+                             "startTime": "2026-08-28 11:12:58"},
+                        ]
+                    }
+                }
+            if action == "list_task_instances":
+                instance_id = payload.get("instance_id")
+                if instance_id == 2503781:
+                    return {"data": {"taskList": [
+                        {"id": 17214176, "name": "校验触发", "taskType": "SHELL"}
+                    ]}}
+                return {"data": {"taskList": [
+                    {"id": 17201039, "name": "dwd_user_sadapay_user_info数据推送"}
+                ]}}
+            if action == "get_task_log":
+                return {"log": SAMPLE_DATAX_LOG}
+            raise AssertionError(f"unexpected action {action}")
+
+        with mock.patch(
+            "alert.pk_sadapay_dwd_push_monitor_alert._call_gateway", side_effect=fake_call_gateway
+        ):
+            metrics = collect_metrics(
+                webhook_url="https://example.test/webhook/ds-scheduler",
+                ds_token="tok",
+            )
+
+        # 应回退到 2501908（含数据推送任务）
+        self.assertEqual(metrics["instance"]["id"], 2501908)
+        self.assertEqual(metrics["task_instance_id"], 17201039)
+        self.assertEqual(metrics["summary"]["读出记录总数"], "3")
+
 
 if __name__ == "__main__":
     unittest.main()

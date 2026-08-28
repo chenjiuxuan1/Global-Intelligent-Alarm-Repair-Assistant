@@ -328,6 +328,63 @@ def get_latest_instance(
     return candidates[-1]
 
 
+def find_latest_instance_with_task(
+    *,
+    webhook_url: str,
+    ds_token: str,
+    project_code: int,
+    workflow_code: int,
+    task_name: str = DEFAULT_TASK_NAME,
+    task_code: Optional[int] = None,
+    gateway_entry: Optional[str] = None,
+    max_instances: int = 20,
+) -> Dict[str, Any]:
+    """从最新实例往前遍历，找到最近一个包含目标任务的实例及其任务。
+
+    某些调度（如工作流改版后）最新实例可能只含部分任务（例如“校验触发”），
+    不包含我们要监控的数据推送任务。此时回退到最近一个包含目标任务的成功实例，
+    保证监控始终读到数据推送任务的日志统计。
+    """
+    data = _call_gateway(
+        "list_instances",
+        {"project_code": project_code, "page_no": 1, "page_size": max_instances, "search_val": ""},
+        webhook_url=webhook_url,
+        ds_token=ds_token,
+        gateway_entry=gateway_entry,
+    )
+    candidates = [
+        item
+        for item in _extract_total_list(data)
+        if _safe_int(item.get("workflowDefinitionCode") or item.get("processDefinitionCode"))
+        == workflow_code
+    ]
+    candidates.sort(
+        key=lambda item: (
+            str(item.get("startTime") or ""),
+            _safe_int(item.get("id")),
+        ),
+        reverse=True,
+    )
+    for instance in candidates:
+        instance_id = _safe_int(instance.get("id"))
+        try:
+            task = find_task_instance(
+                webhook_url=webhook_url,
+                ds_token=ds_token,
+                project_code=project_code,
+                instance_id=instance_id,
+                task_name=task_name,
+                task_code=task_code,
+                gateway_entry=gateway_entry,
+            )
+        except RuntimeError:
+            continue
+        return {"instance": instance, "task": task}
+    raise RuntimeError(
+        f"工作流 {workflow_code} 最近 {max_instances} 次实例中均未找到任务 {task_name!r}"
+    )
+
+
 def find_task_instance(
     *,
     webhook_url: str,
@@ -463,24 +520,18 @@ def collect_metrics(
     )
     workflow_code = workflow["code"]
 
-    instance = get_latest_instance(
+    found = find_latest_instance_with_task(
         webhook_url=webhook_url,
         ds_token=ds_token,
         project_code=project_code,
         workflow_code=workflow_code,
-        gateway_entry=gateway_entry,
-    )
-    instance_id = _safe_int(instance.get("id"))
-
-    task = find_task_instance(
-        webhook_url=webhook_url,
-        ds_token=ds_token,
-        project_code=project_code,
-        instance_id=instance_id,
         task_name=task_name,
         task_code=task_code,
         gateway_entry=gateway_entry,
     )
+    instance = found["instance"]
+    task = found["task"]
+    instance_id = _safe_int(instance.get("id"))
     task_instance_id = _safe_int(task.get("id") or task.get("taskInstanceId"))
 
     log_text = fetch_task_log(
