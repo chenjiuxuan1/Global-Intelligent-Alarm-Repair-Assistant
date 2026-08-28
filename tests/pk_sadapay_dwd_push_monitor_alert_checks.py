@@ -12,11 +12,13 @@ from alert.pk_sadapay_dwd_push_monitor_alert import (
     _call_gateway,
     _extract_total_list,
     _strip_unit,
+    category_from_file,
     find_task_instance,
     find_workflow,
     format_alert_message,
     get_latest_instance,
     parse_datax_summary,
+    parse_ftp_log,
     resolve_project,
 )
 
@@ -28,6 +30,14 @@ SAMPLE_DATAX_LOG = """2026-08-28 08:13:09.927 INFO  - 任务启动时刻 : 2026-
 2026-08-28 08:13:09.927 INFO  - 读出记录总数 : 3
 2026-08-28 08:13:09.927 INFO  - 读写失败总数 : 0
 2026-08-28 08:13:09.961 INFO  - 任务执行结束
+"""
+
+SAMPLE_FTP_LOG = """2026-08-28 16:15:43.654 INFO  -  -> [2026-08-28 16:15:43] 远端扫描完成: files=3, cost=0.19 秒
+2026-08-28 16:15:43.843 INFO  -  -> [2026-08-28 16:15:43] SFTP 待检查文件数: 3
+2026-08-28 16:16:14.394 INFO  -  -> [2026-08-28 16:16:14] 本次运行结束: downloaded=3, processed=3, failed=1
+2026-08-28 16:16:14.394 INFO  -  -> [2026-08-28 16:16:14] 文件名称:Account_Aggregates_270826.csv.pgp 文件数据量:10004 入库成功数据量:10004 入库失败数据量:0
+2026-08-28 16:16:14.394 INFO  -  -> [2026-08-28 16:16:14] 文件名称:Transactions_270826_part_04.csv.pgp 文件数据量:191895 入库成功数据量:191895 入库失败数据量:0
+2026-08-28 16:16:14.394 INFO  -  -> [2026-08-28 16:16:14] 文件名称:User_Identity_270826.csv.pgp 文件数据量:10000 入库成功数据量:0 入库失败数据量:10000
 """
 
 
@@ -98,7 +108,7 @@ class PkSadapayDwdPushAlertTests(unittest.TestCase):
         message = format_alert_message(summary, alert_time="2026-08-28 11:22:22")
         self.assertEqual(
             message,
-            "🚨 sadpay推送业务库监控告警\n"
+            "【sadapay数据监控告警】\n"
             "集群: 巴基斯坦\n"
             "读出记录总数: 3 条，读写失败总数：0条，\n"
             "告警时间: 2026-08-28 11:22:22",
@@ -107,6 +117,45 @@ class PkSadapayDwdPushAlertTests(unittest.TestCase):
         self.assertIn(COUNTRY_LABEL, message)
         # 正文不再写 @ 文本；真正的 @ 由 TV API 的 mentions 字段触发
         self.assertNotIn("@", message)
+
+    def test_format_alert_message_with_ftp_sections(self):
+        summary = parse_datax_summary(SAMPLE_DATAX_LOG)
+        ftp = parse_ftp_log(SAMPLE_FTP_LOG)
+        message = format_alert_message(summary, ftp=ftp, alert_time="2026-08-28 11:22:22")
+        self.assertIn("接收文件数: 3 个 ", message)
+        self.assertIn("失败文件数：1个", message)
+        self.assertIn("文件类别数：3个", message)
+        # 各文件类别汇总行（顺序按解析到的类别顺序）
+        self.assertIn("Account_Aggregates文件记录总数：10004条 入库成功数：10004条 入库失败数： 0条", message)
+        self.assertIn("Transactions文件记录总数：191895条 入库成功数：191895条 入库失败数： 0条", message)
+        self.assertIn("User_Identity文件记录总数：10000条 入库成功数：0条 入库失败数： 10000条", message)
+        self.assertIn("本次运行结束: downloaded=3, processed=3, failed=1", message)
+        # DWD 段仍在
+        self.assertIn("读出记录总数: 3 条，读写失败总数：0条，", message)
+
+    # ----- ftp2starrocks 日志解析 -----
+    def test_parse_ftp_log_extracts_counts_and_categories(self):
+        ftp = parse_ftp_log(SAMPLE_FTP_LOG)
+        self.assertEqual(ftp["receive_files"], 3)
+        self.assertEqual(ftp["failed_files"], 1)
+        self.assertEqual(ftp["run_end"], "downloaded=3, processed=3, failed=1")
+        self.assertEqual(set(ftp["categories"].keys()), {"Account_Aggregates", "Transactions", "User_Identity"})
+        self.assertEqual(ftp["categories"]["Account_Aggregates"]["record_total"], 10004)
+        self.assertEqual(ftp["categories"]["Account_Aggregates"]["success"], 10004)
+        self.assertEqual(ftp["categories"]["User_Identity"]["failed"], 10000)
+        self.assertEqual(len(ftp["files"]), 3)
+
+    def test_category_from_file_variants(self):
+        self.assertEqual(category_from_file("Account_Aggregates_270826.csv.pgp"), "Account_Aggregates")
+        self.assertEqual(category_from_file("Transactions_270826_part_04.csv.pgp"), "Transactions")
+        self.assertEqual(category_from_file("User_Identity_270826.csv.pgp"), "User_Identity")
+
+    def test_parse_ftp_log_empty_log_returns_zeros(self):
+        ftp = parse_ftp_log("no relevant lines here")
+        self.assertEqual(ftp["receive_files"], 0)
+        self.assertEqual(ftp["failed_files"], 0)
+        self.assertEqual(ftp["categories"], {})
+        self.assertEqual(ftp["run_end"], "")
 
     def test_default_mentions_contain_gretchenhe(self):
         self.assertIn("gretchenhe@kn.group", DEFAULT_MENTIONS)

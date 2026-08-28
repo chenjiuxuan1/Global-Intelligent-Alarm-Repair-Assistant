@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
 """
-巴基斯坦 sadapay DWD 数据推送任务日志监控告警。
+巴基斯坦 sadapay 数据监控告警。
 
-扫描巴基斯坦 DolphinScheduler 的 `sadapay_ftp数据接入` 项目下 `DWD` 工作流
-最新一次调度实例中 `dwd_user_sadapay_user_info数据推送` 数据推送任务节点的
-运行日志（DataX JobContainer 统计块），解析以下字段并发送 TV 告警：
-
-- 任务启动时刻
-- 任务结束时刻
-- 任务总计耗时
-- 任务平均流量
-- 记录写入速度
-- 读出记录总数
-- 读写失败总数
+扫描巴基斯坦 DolphinScheduler 的 `sadapay_ftp数据接入` 项目下：
+1. `DWD` 工作流最新一次调度实例中 `dwd_user_sadapay_user_info数据推送` 数据推送任务
+   的运行日志（DataX JobContainer 统计块），解析 读出记录总数 / 读写失败总数；
+2. `ftp2starrocks` 工作流最新一次调度实例中 `ftp2starrocks` 任务的运行日志，
+   解析 接收文件数 / 失败文件数 / 文件类别数 / 各文件类别汇总 / 本次运行结束。
 
 消息格式（与需求一致）：
-    🚨 sadpay推送业务库监控告警
+    【sadapay数据监控告警】
     集群: 巴基斯坦
-    读出记录总数: xxx 条，读写失败总数：xx条，
-    告警时间: 2026-08-28 11:22:22
+    接收文件数: 10 个
+    失败文件数：xx个
+    文件类别数：3个
+    Transactions文件记录总数：xxxx条 入库成功数：xx条 入库失败数： xx条
+    Account_Aggregates文件记录总数：xxxx条 入库成功数：xx条 入库失败数： xx条
+    User_Identity文件记录总数：xxxx条 入库成功数：xx条 入库失败数： xx条
+    本次运行结束: downloaded=1, processed=1, failed=0
+    读出记录总数: 10001 条，读写失败总数：0条，
+    告警时间: 2026-08-28 15:12:49
 
 真正的 @ 提醒由 TV API 的 mentions 字段触发（默认 gretchenhe@kn.group = 何柳琴），
 消息正文不再重复写 @ 文本。
@@ -73,6 +74,10 @@ DEFAULT_PROJECT_NAME = "sadapay_ftp数据接入"
 DEFAULT_WORKFLOW_NAME = "DWD"
 DEFAULT_TASK_NAME = "dwd_user_sadapay_user_info数据推送"
 
+# ftp2starrocks 工作流（接收文件 / 文件类别 / 各文件汇总 / 本次运行结束）
+DEFAULT_FTP_WORKFLOW_NAME = "ftp2starrocks"
+DEFAULT_FTP_TASK_NAME = "ftp2starrocks"
+
 # 解析字段
 LOG_FIELD_NAMES = [
     "任务启动时刻",
@@ -86,12 +91,21 @@ LOG_FIELD_NAMES = [
 FIELD_PATTERN = re.compile(r"(任务启动时刻|任务结束时刻|任务总计耗时|任务平均流量|记录写入速度|读出记录总数|读写失败总数)\s*[:：]\s*([^\r\n]*)")
 
 # 告警消息
-ALERT_TITLE = "🚨 sadpay推送业务库监控告警"
+ALERT_TITLE = "【sadapay数据监控告警】"
 
 # 何柳琴 = gretchenhe@kn.group
 DEFAULT_MENTIONS = ["gretchenhe@kn.group"]
 # KN Chat 目标群 chat_id（数仓告警机器人 @Data_Warehouse_Alarm_Robot 已加入 sadapay数据告警群）
 DEFAULT_KNCHAT_CHAT_ID = "-1073805088"
+
+# ftp2starrocks 日志解析（pgp_to_starrocks_v4.py 输出）
+FTP_SCAN_FILES_RE = re.compile(r"远端扫描完成:\s*files=(\d+)")
+FTP_CHECK_FILES_RE = re.compile(r"SFTP\s+待检查文件数:\s*(\d+)")
+FTP_FILE_SUMMARY_RE = re.compile(
+    r"文件名称:([^\s]+)\s+文件数据量:(\d+)\s+"
+    r"入库成功数据量:(\d+)\s+入库失败数据量:(\d+)"
+)
+FTP_RUN_END_RE = re.compile(r"本次运行结束:\s*downloaded=(\d+),\s*processed=(\d+),\s*failed=(\d+)")
 
 
 # ---------------------------------------------------------------------------
@@ -456,23 +470,120 @@ def _strip_unit(value: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# ftp2starrocks 日志解析（接收文件 / 文件类别 / 各文件汇总 / 本次运行结束）
+# ---------------------------------------------------------------------------
+def category_from_file(filename: str) -> str:
+    """从文件名称推导类别名。
+
+    例如：
+      Account_Aggregates_270826.csv.pgp -> Account_Aggregates
+      Transactions_270826_part_04.csv.pgp -> Transactions
+      User_Identity_270826.csv.pgp -> User_Identity
+    """
+    base = re.sub(r"\.(pgp|gpg)$", "", str(filename or ""), flags=re.I)
+    base = re.sub(r"\.csv$", "", base, flags=re.I)
+    base = re.sub(r"(?i)_part[_-]?\d+$", "", base)
+    base = re.sub(r"(?i)[_-]\d{6,8}$", "", base)
+    return base or "unknown"
+
+
+def parse_ftp_log(log_text: str) -> Dict[str, Any]:
+    """解析 ftp2starrocks 任务日志，返回：
+    - receive_files: 接收文件数（远端扫描 files，回退 downloaded）
+    - failed_files: 失败文件数（本次运行结束 failed）
+    - categories: {类别名: {"record_total": int, "success": int, "failed": int}}
+    - run_end: 本次运行结束原始行文本（如 downloaded=2, processed=2, failed=0）
+    - files: [{"filename","category","recordcount","loadedcount","loadfailedcount"}, ...]
+    """
+    scan_match = FTP_SCAN_FILES_RE.search(log_text) or FTP_CHECK_FILES_RE.search(log_text)
+    receive_files = int(scan_match.group(1)) if scan_match else 0
+
+    run_end_match = FTP_RUN_END_RE.search(log_text)
+    run_end = ""
+    downloaded = 0
+    processed = 0
+    failed_files = 0
+    if run_end_match:
+        downloaded = int(run_end_match.group(1))
+        processed = int(run_end_match.group(2))
+        failed_files = int(run_end_match.group(3))
+        run_end = f"downloaded={downloaded}, processed={processed}, failed={failed_files}"
+
+    files: List[Dict[str, Any]] = []
+    categories: Dict[str, Dict[str, int]] = {}
+    for match in FTP_FILE_SUMMARY_RE.finditer(log_text):
+        filename = match.group(1)
+        recordcount = int(match.group(2))
+        loadedcount = int(match.group(3))
+        loadfailedcount = int(match.group(4))
+        category = category_from_file(filename)
+        files.append({
+            "filename": filename,
+            "category": category,
+            "recordcount": recordcount,
+            "loadedcount": loadedcount,
+            "loadfailedcount": loadfailedcount,
+        })
+        cat = categories.setdefault(category, {"record_total": 0, "success": 0, "failed": 0})
+        cat["record_total"] += recordcount
+        cat["success"] += loadedcount
+        cat["failed"] += loadfailedcount
+
+    # 接收文件数：优先用扫描数；没有则用 downloaded；再没有用明细文件数
+    if not receive_files:
+        receive_files = downloaded or len(files)
+
+    return {
+        "receive_files": receive_files,
+        "failed_files": failed_files,
+        "categories": categories,
+        "run_end": run_end,
+        "files": files,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 消息组装 / TV 发送
 # ---------------------------------------------------------------------------
 def format_alert_message(
     summary: Dict[str, str],
+    ftp: Optional[Dict[str, Any]] = None,
     alert_time: Optional[str] = None,
     cluster_label: str = COUNTRY_LABEL,
     title: str = ALERT_TITLE,
 ) -> str:
+    """组装新格式告警消息。
+
+    参数：
+      summary: DWD 数据推送日志解析出的字段（读出记录总数 / 读写失败总数）
+      ftp: ftp2starrocks 日志解析结果（parse_ftp_log 返回），可空
+    """
     now = alert_time or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     read_total = _strip_unit(summary.get("读出记录总数"))
     write_failed = _strip_unit(summary.get("读写失败总数"))
+
     lines = [
         title,
         f"集群: {cluster_label}",
-        f"读出记录总数: {read_total} 条，读写失败总数：{write_failed}条，",
-        f"告警时间: {now}",
     ]
+
+    if ftp:
+        lines.append(f"接收文件数: {ftp['receive_files']} 个 ")
+        lines.append(f"失败文件数：{ftp['failed_files']}个")
+        categories = ftp.get("categories") or {}
+        lines.append(f"文件类别数：{len(categories)}个")
+        for category in categories:
+            cat = categories[category]
+            lines.append(
+                f"{category}文件记录总数：{cat['record_total']}条 "
+                f"入库成功数：{cat['success']}条 "
+                f"入库失败数： {cat['failed']}条"
+            )
+        if ftp.get("run_end"):
+            lines.append(f"本次运行结束: {ftp['run_end']}")
+
+    lines.append(f"读出记录总数: {read_total} 条，读写失败总数：{write_failed}条，")
+    lines.append(f"告警时间: {now}")
     return "\n".join(lines)
 
 
@@ -559,6 +670,57 @@ def collect_metrics(
     }
 
 
+def collect_ftp_metrics(
+    *,
+    webhook_url: str,
+    ds_token: str,
+    project_code: int,
+    ftp_workflow_name: str = DEFAULT_FTP_WORKFLOW_NAME,
+    ftp_workflow_code: Optional[int] = None,
+    ftp_task_name: str = DEFAULT_FTP_TASK_NAME,
+    gateway_entry: Optional[str] = None,
+) -> Dict[str, Any]:
+    """拉取 ftp2starrocks 工作流最新实例日志并解析（接收文件/类别/本次运行结束）。"""
+    workflow = find_workflow(
+        webhook_url=webhook_url,
+        ds_token=ds_token,
+        project_code=project_code,
+        workflow_name=ftp_workflow_name,
+        workflow_code=ftp_workflow_code,
+        gateway_entry=gateway_entry,
+    )
+    ftp_workflow_code = workflow["code"]
+
+    found = find_latest_instance_with_task(
+        webhook_url=webhook_url,
+        ds_token=ds_token,
+        project_code=project_code,
+        workflow_code=ftp_workflow_code,
+        task_name=ftp_task_name,
+        gateway_entry=gateway_entry,
+    )
+    instance = found["instance"]
+    task = found["task"]
+    task_instance_id = _safe_int(task.get("id") or task.get("taskInstanceId"))
+
+    log_text = fetch_task_log(
+        webhook_url=webhook_url,
+        ds_token=ds_token,
+        project_code=project_code,
+        task_instance_id=task_instance_id,
+        gateway_entry=gateway_entry,
+    )
+    parsed = parse_ftp_log(log_text)
+    return {
+        "ftp_workflow_code": ftp_workflow_code,
+        "ftp_instance": instance,
+        "ftp_task": task,
+        "ftp_task_instance_id": task_instance_id,
+        "ftp_log_text": log_text,
+        "ftp": parsed,
+    }
+
+
 def run(
     *,
     webhook_url: str,
@@ -572,6 +734,9 @@ def run(
     workflow_code: Optional[int] = None,
     task_name: str = DEFAULT_TASK_NAME,
     task_code: Optional[int] = None,
+    ftp_workflow_name: str = DEFAULT_FTP_WORKFLOW_NAME,
+    ftp_workflow_code: Optional[int] = None,
+    ftp_task_name: str = DEFAULT_FTP_TASK_NAME,
     alert_time: Optional[str] = None,
     gateway_entry: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -586,13 +751,35 @@ def run(
         task_code=task_code,
         gateway_entry=gateway_entry,
     )
-    message = format_alert_message(metrics["summary"], alert_time=alert_time)
+    project_code = metrics["project_code"]
+
+    ftp_metrics = None
+    try:
+        ftp_metrics = collect_ftp_metrics(
+            webhook_url=webhook_url,
+            ds_token=ds_token,
+            project_code=project_code,
+            ftp_workflow_name=ftp_workflow_name,
+            ftp_workflow_code=ftp_workflow_code,
+            ftp_task_name=ftp_task_name,
+            gateway_entry=gateway_entry,
+        )
+    except RuntimeError as exc:
+        print(f"⚠️ 获取 ftp2starrocks 指标失败（不影响 DWD 统计）: {exc}")
+        ftp_metrics = None
+
+    ftp_parsed = ftp_metrics["ftp"] if ftp_metrics else None
+    message = format_alert_message(metrics["summary"], ftp=ftp_parsed, alert_time=alert_time)
     if not message.endswith("\n"):
         message = f"{message}\n"
 
+    result_ctx = dict(metrics)
+    if ftp_metrics:
+        result_ctx["ftp"] = ftp_parsed
+
     if dry_run:
         print(message)
-        return {"success": True, "status_code": None, "response": "dry_run", "metrics": metrics}
+        return {"success": True, "status_code": None, "response": "dry_run", "metrics": result_ctx}
 
     result = send_to_tv(message, mentions=mentions, bot_id=bot_id)
     if result.get("success"):
@@ -657,6 +844,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--workflow-code", type=int, default=None)
     parser.add_argument("--task-name", default=DEFAULT_TASK_NAME)
     parser.add_argument("--task-code", type=int, default=None)
+    parser.add_argument("--ftp-workflow-name", default=DEFAULT_FTP_WORKFLOW_NAME)
+    parser.add_argument("--ftp-workflow-code", type=int, default=None)
+    parser.add_argument("--ftp-task-name", default=DEFAULT_FTP_TASK_NAME)
     return parser.parse_args(argv)
 
 
@@ -682,6 +872,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             workflow_code=args.workflow_code,
             task_name=args.task_name,
             task_code=args.task_code,
+            ftp_workflow_name=args.ftp_workflow_name,
+            ftp_workflow_code=args.ftp_workflow_code,
+            ftp_task_name=args.ftp_task_name,
             gateway_entry=gateway_entry,
         )
     except Exception as exc:  # noqa: BLE001 - 顶层兜底
