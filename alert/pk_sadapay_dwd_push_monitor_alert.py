@@ -34,7 +34,7 @@ DS 访问方式（两种，二选一）：
         [--ds-token <token>] [--webhook-url <url>] [--gateway-entry <path>] \
         [--bot-id <id>] [--mentions <a@b.com,c@d.com>]
 
-依赖：Python3 标准库（urllib/json/re/subprocess）+ 平台 core/send_tv_report.py。
+依赖：Python3 标准库（urllib/json/re/subprocess）+ 平台 core/send_knchat_report.py。
 """
 
 from __future__ import annotations
@@ -88,10 +88,10 @@ FIELD_PATTERN = re.compile(r"(任务启动时刻|任务结束时刻|任务总计
 # 告警消息
 ALERT_TITLE = "🚨 sadpay推送业务库监控告警"
 
-# 何柳琴 = gretchenhe@kn.group（真正的 @ 由 TV API mentions 字段触发）
+# 何柳琴 = gretchenhe@kn.group
 DEFAULT_MENTIONS = ["gretchenhe@kn.group"]
-# PL 告警测试群机器人（与现有 PL 告警共用）
-DEFAULT_BOT_ID = "4d0bcc9b-71bf-41c5-ba9f-89b7278f9214"
+# KN Chat 目标群 chat_id（数仓告警机器人 @Data_Warehouse_Alarm_Robot 已加入 sadapay数据告警群）
+DEFAULT_KNCHAT_CHAT_ID = "-1073805088"
 
 
 # ---------------------------------------------------------------------------
@@ -481,11 +481,17 @@ def send_to_tv(
     mentions: Optional[List[str]] = None,
     bot_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    from core.send_tv_report import send_tv_report
+    """发送告警到 KN Chat 群（数仓告警机器人）。
 
-    if mentions is None:
-        mentions = DEFAULT_MENTIONS
-    return send_tv_report(message, mentions=mentions, bot_id=bot_id or DEFAULT_BOT_ID)
+    兼容保留 mentions/bot_id 参数签名，但实际使用 KN Chat Bot API：
+    - bot token 读 KNCHAT_BOT_TOKEN
+    - 目标群 chat_id 用 bot_id（兼容旧的 --bot-id 传群 id）或 KNCHAT_CHAT_ID，
+      兜底 DEFAULT_KNCHAT_CHAT_ID（sadapay数据告警群）
+    """
+    from core.send_knchat_report import send_knchat_message
+
+    chat_id = bot_id or os.environ.get("KNCHAT_CHAT_ID") or DEFAULT_KNCHAT_CHAT_ID
+    return send_knchat_message(message, chat_id=chat_id)
 
 
 def collect_metrics(
@@ -590,9 +596,9 @@ def run(
 
     result = send_to_tv(message, mentions=mentions, bot_id=bot_id)
     if result.get("success"):
-        print(f"✅ TV告警发送成功 (HTTP {result.get('status_code')})")
+        print(f"✅ 告警发送成功 (HTTP {result.get('status_code')})")
     else:
-        print(f"❌ TV告警发送失败 (HTTP {result.get('status_code')})")
+        print(f"❌ 告警发送失败 (HTTP {result.get('status_code')})")
         print(result.get("response"))
     return result
 
@@ -613,7 +619,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="巴基斯坦 sadapay DWD 数据推送任务日志监控告警"
     )
-    parser.add_argument("--dry-run", action="store_true", help="只打印消息，不发送 TV")
+    parser.add_argument("--dry-run", action="store_true", help="只打印消息，不发送")
     parser.add_argument(
         "--webhook-url",
         default=None,
@@ -632,11 +638,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="巴基斯坦 DS token（默认读 DS_API_TOKEN_PK / PK_DS_TOKEN / DS_TOKEN）",
     )
-    parser.add_argument("--bot-id", default=None, help="TV 机器人 ID")
+    parser.add_argument(
+        "--bot-id",
+        default=None,
+        help=(
+            "KN Chat 目标群 chat_id（默认读 KNCHAT_CHAT_ID，兜底 sadapay数据告警群 "
+            + DEFAULT_KNCHAT_CHAT_ID + "）"
+        ),
+    )
     parser.add_argument(
         "--mentions",
         default=",".join(DEFAULT_MENTIONS),
-        help="逗号分隔的提醒邮箱列表",
+        help="逗号分隔的提醒邮箱列表（兼容保留，KN Chat 模式下不生效）",
     )
     parser.add_argument("--project-name", default=DEFAULT_PROJECT_NAME)
     parser.add_argument("--project-code", type=int, default=None)
