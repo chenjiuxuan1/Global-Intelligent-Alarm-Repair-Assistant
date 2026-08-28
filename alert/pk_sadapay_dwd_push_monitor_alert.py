@@ -21,23 +21,28 @@
     告警时间: 2026-08-28 11:22:22
     @何柳琴
 
-DS 访问方式：通过 n8n ds-scheduler 网关 webhook（country=pk）调用
-DolphinScheduler REST API，与 ds-scheduler skill 的访问路径一致。
+DS 访问方式（两种，二选一）：
+- webhook 模式：通过 n8n ds-scheduler 网关 webhook（country=pk）调用 DolphinScheduler REST API
+- 直连模式：在本机（跳板机）直接调用 ds-scheduler-gateway 本地入口
+  （--gateway-entry，默认 /root/ds-scheduler-gateway/scripts/ds_scheduler_entry.py）
+  当公网 webhook 域名从跳板机访问被 WAF 拦截时，应使用直连模式。
 
 用法：
     python3 alert/pk_sadapay_dwd_push_monitor_alert.py [--dry-run] \
-        [--ds-token <token>] [--webhook-url <url>] [--bot-id <id>] \
-        [--mentions <a@b.com,c@d.com>]
+        [--ds-token <token>] [--webhook-url <url>] [--gateway-entry <path>] \
+        [--bot-id <id>] [--mentions <a@b.com,c@d.com>]
 
-依赖：Python3 标准库（urllib/json/re）+ 平台 core/send_tv_report.py。
+依赖：Python3 标准库（urllib/json/re/subprocess）+ 平台 core/send_tv_report.py。
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -58,6 +63,8 @@ COUNTRY_LABEL = "巴基斯坦"
 SOURCE = "pk_sadapay_dwd_alert"
 
 DEFAULT_WEBHOOK_URL = "https://sql-cn.kuainiujinke.com/webhook/ds-scheduler"
+# 跳板机直连模式：调用 ds-scheduler-gateway 的本地入口（与 ds-scheduler-router 同架构）
+DEFAULT_GATEWAY_ENTRY = "/root/ds-scheduler-gateway/scripts/ds_scheduler_entry.py"
 
 # 项目 / 工作流 / 任务（按名称解析，运行时可覆盖为 code）
 DEFAULT_PROJECT_NAME = "sadapay_ftp数据接入"
@@ -97,9 +104,22 @@ def _call_gateway(
     ds_token: str,
     country: str = COUNTRY,
     timeout: int = 40,
+    gateway_entry: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """调用 ds-scheduler 网关 webhook 并返回其 data 字段（已解析）。"""
+    """调用 ds-scheduler 网关并返回其 data 字段（已解析）。
+
+    两种模式：
+    - webhook 模式：POST 到 ds-scheduler 网关 webhook
+    - 直连模式（gateway_entry 非空）：在本机直接运行
+      ds-scheduler-gateway 的入口脚本（payload-b64 -> stdout JSON），
+      与 ds-scheduler-router n8n 节点同架构，适合跳板机运行。
+    """
     request_id = f"{SOURCE}-{int(time.time() * 1000)}"
+    if gateway_entry:
+        return _call_gateway_entry(
+            action, payload, entry=gateway_entry, ds_token=ds_token,
+            country=country, request_id=request_id, timeout=timeout,
+        )
     body = {
         "source": SOURCE,
         "country": country,
@@ -134,6 +154,63 @@ def _call_gateway(
     if not isinstance(result, dict) or not result.get("success"):
         msg = result.get("message") or result.get("msg") or str(result)
         raise RuntimeError(f"网关 {action} 返回失败: {msg}")
+    return result.get("data") or {}
+
+
+def _call_gateway_entry(
+    action: str,
+    payload: Dict[str, Any],
+    *,
+    entry: str,
+    ds_token: str,
+    country: str,
+    request_id: str,
+    timeout: int = 40,
+) -> Dict[str, Any]:
+    """直连模式：运行 ds-scheduler-gateway 入口脚本并解析 stdout JSON。"""
+    payload_b64 = base64.b64encode(
+        json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
+    cmd = [
+        sys.executable,
+        entry,
+        "--country", country,
+        "--action", action,
+        "--ds-token", ds_token,
+        "--request-id", request_id,
+        "--payload-b64", payload_b64,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"网关 {action} 直连超时") from exc
+    except OSError as exc:
+        raise RuntimeError(f"网关 {action} 无法运行入口 {entry}: {exc}") from exc
+
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"网关 {action} 直连退出码 {proc.returncode}: {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+    try:
+        result = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"网关 {action} 直连输出非 JSON: {proc.stdout[:300]}"
+        ) from exc
+    if not isinstance(result, dict) or not result.get("success"):
+        error = result.get("error") or {}
+        msg = ""
+        if isinstance(error, dict):
+            msg = json.dumps(error, ensure_ascii=False)
+        elif error:
+            msg = str(error)
+        raise RuntimeError(f"网关 {action} 返回失败: {msg or result}")
     return result.get("data") or {}
 
 
@@ -175,6 +252,7 @@ def resolve_project(
     ds_token: str,
     project_name: str = DEFAULT_PROJECT_NAME,
     project_code: Optional[int] = None,
+    gateway_entry: Optional[str] = None,
 ) -> Dict[str, Any]:
     if project_code:
         return {"code": project_code, "name": project_name}
@@ -183,6 +261,7 @@ def resolve_project(
         {"project_name": project_name},
         webhook_url=webhook_url,
         ds_token=ds_token,
+        gateway_entry=gateway_entry,
     )
     code = _safe_int(
         data.get("project_code") or data.get("code") or data.get("project", {}).get("code")
@@ -199,6 +278,7 @@ def find_workflow(
     project_code: int,
     workflow_name: str = DEFAULT_WORKFLOW_NAME,
     workflow_code: Optional[int] = None,
+    gateway_entry: Optional[str] = None,
 ) -> Dict[str, Any]:
     if workflow_code:
         return {"code": workflow_code, "name": workflow_name}
@@ -207,6 +287,7 @@ def find_workflow(
         {"project_code": project_code, "page_no": 1, "page_size": 100, "search_val": ""},
         webhook_url=webhook_url,
         ds_token=ds_token,
+        gateway_entry=gateway_entry,
     )
     for item in _extract_total_list(data):
         if str(item.get("name") or "").strip() == workflow_name:
@@ -220,12 +301,14 @@ def get_latest_instance(
     ds_token: str,
     project_code: int,
     workflow_code: int,
+    gateway_entry: Optional[str] = None,
 ) -> Dict[str, Any]:
     data = _call_gateway(
         "list_instances",
         {"project_code": project_code, "page_no": 1, "page_size": 100, "search_val": ""},
         webhook_url=webhook_url,
         ds_token=ds_token,
+        gateway_entry=gateway_entry,
     )
     candidates = [
         item
@@ -252,6 +335,7 @@ def find_task_instance(
     instance_id: int,
     task_name: str = DEFAULT_TASK_NAME,
     task_code: Optional[int] = None,
+    gateway_entry: Optional[str] = None,
 ) -> Dict[str, Any]:
     data = _call_gateway(
         "list_task_instances",
@@ -264,6 +348,7 @@ def find_task_instance(
         },
         webhook_url=webhook_url,
         ds_token=ds_token,
+        gateway_entry=gateway_entry,
     )
     for item in _extract_total_list(data):
         item_name = str(item.get("name") or item.get("taskName") or "").strip()
@@ -281,12 +366,14 @@ def fetch_task_log(
     ds_token: str,
     project_code: int,
     task_instance_id: int,
+    gateway_entry: Optional[str] = None,
 ) -> str:
     data = _call_gateway(
         "get_task_log",
         {"project_code": project_code, "task_instance_id": task_instance_id},
         webhook_url=webhook_url,
         ds_token=ds_token,
+        gateway_entry=gateway_entry,
     )
     log = _extract_log_text(data)
     if not log:
@@ -355,6 +442,7 @@ def collect_metrics(
     workflow_code: Optional[int] = None,
     task_name: str = DEFAULT_TASK_NAME,
     task_code: Optional[int] = None,
+    gateway_entry: Optional[str] = None,
 ) -> Dict[str, Any]:
     """拉取最新任务日志并解析统计字段，返回上下文（含 summary / instance / task）。"""
     project = resolve_project(
@@ -362,6 +450,7 @@ def collect_metrics(
         ds_token=ds_token,
         project_name=project_name,
         project_code=project_code,
+        gateway_entry=gateway_entry,
     )
     project_code = project["code"]
 
@@ -371,6 +460,7 @@ def collect_metrics(
         project_code=project_code,
         workflow_name=workflow_name,
         workflow_code=workflow_code,
+        gateway_entry=gateway_entry,
     )
     workflow_code = workflow["code"]
 
@@ -379,6 +469,7 @@ def collect_metrics(
         ds_token=ds_token,
         project_code=project_code,
         workflow_code=workflow_code,
+        gateway_entry=gateway_entry,
     )
     instance_id = _safe_int(instance.get("id"))
 
@@ -389,6 +480,7 @@ def collect_metrics(
         instance_id=instance_id,
         task_name=task_name,
         task_code=task_code,
+        gateway_entry=gateway_entry,
     )
     task_instance_id = _safe_int(task.get("id") or task.get("taskInstanceId"))
 
@@ -397,6 +489,7 @@ def collect_metrics(
         ds_token=ds_token,
         project_code=project_code,
         task_instance_id=task_instance_id,
+        gateway_entry=gateway_entry,
     )
     summary = parse_datax_summary(log_text)
     return {
@@ -424,6 +517,7 @@ def run(
     task_name: str = DEFAULT_TASK_NAME,
     task_code: Optional[int] = None,
     alert_time: Optional[str] = None,
+    gateway_entry: Optional[str] = None,
 ) -> Dict[str, Any]:
     metrics = collect_metrics(
         webhook_url=webhook_url,
@@ -434,6 +528,7 @@ def run(
         workflow_code=workflow_code,
         task_name=task_name,
         task_code=task_code,
+        gateway_entry=gateway_entry,
     )
     message = format_alert_message(metrics["summary"], alert_time=alert_time)
     if not message.endswith("\n"):
@@ -475,6 +570,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="ds-scheduler 网关 webhook URL（默认读 DS_SCHEDULER_WEBHOOK_URL 环境变量）",
     )
     parser.add_argument(
+        "--gateway-entry",
+        default=None,
+        help=(
+            "直连模式：本机 ds-scheduler-gateway 入口脚本路径"
+            "（默认读 DS_GATEWAY_ENTRY，兜底 " + DEFAULT_GATEWAY_ENTRY + "）"
+        ),
+    )
+    parser.add_argument(
         "--ds-token",
         default=None,
         help="巴基斯坦 DS token（默认读 DS_API_TOKEN_PK / PK_DS_TOKEN / DS_TOKEN）",
@@ -501,6 +604,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("❌ 缺少 DS token：请通过 --ds-token 或环境变量 DS_API_TOKEN_PK / PK_DS_TOKEN / DS_TOKEN 提供")
         return 2
     webhook_url = (args.webhook_url or _env_webhook()).strip()
+    gateway_entry = (args.gateway_entry or os.environ.get("DS_GATEWAY_ENTRY") or "").strip() or None
     mentions = [item.strip() for item in args.mentions.split(",") if item.strip()]
     try:
         result = run(
@@ -515,6 +619,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             workflow_code=args.workflow_code,
             task_name=args.task_name,
             task_code=args.task_code,
+            gateway_entry=gateway_entry,
         )
     except Exception as exc:  # noqa: BLE001 - 顶层兜底
         print(f"❌ 告警执行失败: {exc}")

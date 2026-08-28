@@ -154,6 +154,71 @@ class PkSadapayDwdPushAlertTests(unittest.TestCase):
                     ds_token="tok-123",
                 )
 
+    def test_call_gateway_entry_runs_entry_and_parses_data(self):
+        """直连模式：调用 ds_scheduler_entry.py 并解析 stdout JSON 的 data。"""
+        captured = {}
+
+        class FakeProc:
+            returncode = 0
+            stdout = json.dumps(
+                {
+                    "success": True,
+                    "country": "pk",
+                    "action": "list_workflows",
+                    "request_id": "req-1",
+                    "data": {"data": {"totalList": [{"code": 1}]}},
+                    "error": None,
+                },
+                ensure_ascii=False,
+            )
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return FakeProc()
+
+        with mock.patch("alert.pk_sadapay_dwd_push_monitor_alert.subprocess.run", side_effect=fake_run):
+            result = _call_gateway(
+                "list_workflows",
+                {"project_code": 123},
+                webhook_url="https://example.test/webhook/ds-scheduler",
+                ds_token="tok-123",
+                gateway_entry="/root/ds-scheduler-gateway/scripts/ds_scheduler_entry.py",
+            )
+
+        self.assertIn("/root/ds-scheduler-gateway/scripts/ds_scheduler_entry.py", captured["cmd"])
+        self.assertIn("--country", captured["cmd"])
+        self.assertIn("pk", captured["cmd"])
+        self.assertIn("tok-123", captured["cmd"])
+        self.assertTrue(captured["kwargs"]["capture_output"])
+        self.assertEqual(result["data"]["totalList"], [{"code": 1}])
+
+    def test_call_gateway_entry_raises_on_failure(self):
+        class FakeProcFail:
+            returncode = 0
+            stdout = json.dumps(
+                {"success": False, "country": "pk", "action": "resolve_project",
+                 "request_id": "req-2", "data": None,
+                 "error": {"code": "DS_API_ERROR", "message": {"status": 401}}},
+                ensure_ascii=False,
+            )
+            stderr = ""
+
+        with mock.patch(
+            "alert.pk_sadapay_dwd_push_monitor_alert.subprocess.run",
+            return_value=FakeProcFail(),
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                _call_gateway(
+                    "resolve_project",
+                    {"project_name": "sadapay_ftp数据接入"},
+                    webhook_url="https://example.test/webhook/ds-scheduler",
+                    ds_token="tok-123",
+                    gateway_entry="/root/ds-scheduler-gateway/scripts/ds_scheduler_entry.py",
+                )
+        self.assertIn("DS_API_ERROR", str(ctx.exception))
+
     # ----- 解析辅助 -----
     def test_extract_total_list_handles_wrapped_shape(self):
         result = {"code": 0, "msg": "success", "data": {"totalList": [{"code": 1}, {"code": 2}]}}
