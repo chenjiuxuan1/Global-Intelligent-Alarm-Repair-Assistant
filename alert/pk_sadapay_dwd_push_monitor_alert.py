@@ -19,7 +19,9 @@
     集群: 巴基斯坦
     读出记录总数: xxx 条，读写失败总数：xx条，
     告警时间: 2026-08-28 11:22:22
-    @何柳琴
+
+真正的 @ 提醒由 TV API 的 mentions 字段触发（默认 gretchenhe@kn.group = 何柳琴），
+消息正文不再重复写 @ 文本。
 
 DS 访问方式（两种，二选一）：
 - webhook 模式：通过 n8n ds-scheduler 网关 webhook（country=pk）调用 DolphinScheduler REST API
@@ -85,9 +87,8 @@ FIELD_PATTERN = re.compile(r"(任务启动时刻|任务结束时刻|任务总计
 
 # 告警消息
 ALERT_TITLE = "🚨 sadpay推送业务库监控告警"
-MENTION_LABEL = "何柳琴"
 
-# 何柳琴 = gretchenhe@kn.group
+# 何柳琴 = gretchenhe@kn.group（真正的 @ 由 TV API mentions 字段触发）
 DEFAULT_MENTIONS = ["gretchenhe@kn.group"]
 # PL 告警测试群机器人（与现有 PL 告警共用）
 DEFAULT_BOT_ID = "4d0bcc9b-71bf-41c5-ba9f-89b7278f9214"
@@ -403,7 +404,6 @@ def _strip_unit(value: str) -> int:
 def format_alert_message(
     summary: Dict[str, str],
     alert_time: Optional[str] = None,
-    mention_label: str = MENTION_LABEL,
     cluster_label: str = COUNTRY_LABEL,
     title: str = ALERT_TITLE,
 ) -> str:
@@ -415,7 +415,6 @@ def format_alert_message(
         f"集群: {cluster_label}",
         f"读出记录总数: {read_total} 条，读写失败总数：{write_failed}条，",
         f"告警时间: {now}",
-        f"@{mention_label}",
     ]
     return "\n".join(lines)
 

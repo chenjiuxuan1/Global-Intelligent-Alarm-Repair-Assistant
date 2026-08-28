@@ -9,7 +9,6 @@ from alert.pk_sadapay_dwd_push_monitor_alert import (
     COUNTRY_LABEL,
     DEFAULT_MENTIONS,
     FIELD_PATTERN,
-    MENTION_LABEL,
     _call_gateway,
     _extract_total_list,
     _strip_unit,
@@ -102,12 +101,12 @@ class PkSadapayDwdPushAlertTests(unittest.TestCase):
             "🚨 sadpay推送业务库监控告警\n"
             "集群: 巴基斯坦\n"
             "读出记录总数: 3 条，读写失败总数：0条，\n"
-            "告警时间: 2026-08-28 11:22:22\n"
-            "@何柳琴",
+            "告警时间: 2026-08-28 11:22:22",
         )
         self.assertIn(ALERT_TITLE, message)
         self.assertIn(COUNTRY_LABEL, message)
-        self.assertIn(MENTION_LABEL, message)
+        # 正文不再写 @ 文本；真正的 @ 由 TV API 的 mentions 字段触发
+        self.assertNotIn("@", message)
 
     def test_default_mentions_contain_gretchenhe(self):
         self.assertIn("gretchenhe@kn.group", DEFAULT_MENTIONS)
