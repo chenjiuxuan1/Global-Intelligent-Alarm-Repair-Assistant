@@ -1,0 +1,129 @@
+{
+  "name": "巴基斯坦-sadpay推送业务库监控告警",
+  "nodes": [
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh root@10.20.84.176 -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes 'echo \"========== 巴基斯坦 sadpay推送业务库监控告警 ==========\"; echo \"平台目录: /root/Global-Intelligent-Alarm-Repair-Assistant\"; if [ ! -d /root/Global-Intelligent-Alarm-Repair-Assistant ]; then echo \"平台代码不存在，开始首次 clone\"; GIT_TERMINAL_PROMPT=0 timeout 120s git clone https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git /root/Global-Intelligent-Alarm-Repair-Assistant || { code=$?; echo \"clone 失败，退出码: $code\"; exit $code; }; else echo \"平台代码目录已存在，跳过首次 clone\"; fi; cd /root/Global-Intelligent-Alarm-Repair-Assistant || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; echo \"开始拉取最新代码\"; git remote set-url origin https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git || { code=$?; echo \"设置远端失败，退出码: $code\"; exit $code; }; GIT_TERMINAL_PROMPT=0 timeout 120s git -c http.connectTimeout=15 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 fetch origin master:refs/remotes/origin/master || { code=$?; echo \"fetch 失败或超时，退出码: $code\"; exit $code; }; git reset --hard origin/master || { code=$?; echo \"reset 失败，退出码: $code\"; exit $code; }; echo \"当前版本: $(git log -1 --oneline 2>/dev/null || echo unknown)\"; echo \"拉取完成\"'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1152,
+        608
+      ],
+      "id": "sadpay-pull-0001",
+      "name": "sadpay告警代码拉取",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "W8NbqcmBWoI5MZ3s",
+          "name": "巴基斯坦跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "ssh root@10.20.84.176 -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes 'cd /root/Global-Intelligent-Alarm-Repair-Assistant || { code=$?; echo \"进入平台目录失败，退出码: $code\"; exit $code; }; if [ -f .env.local ]; then echo \"加载 .env.local\"; set -a; source .env.local; set +a; else echo \"未发现 .env.local，使用 n8n 内置变量\"; fi; echo \"开始执行: sadpay推送业务库监控告警\"; python3 -u alert/pk_sadapay_dwd_push_monitor_alert.py --bot-id \"${TV_BOT_ID:-4d0bcc9b-71bf-41c5-ba9f-89b7278f9214}\" --mentions \"${SADPAY_TV_MENTIONS:-gretchenhe@kn.group}\"; code=$?; echo \"执行完成，退出码: $code\"; exit \"$code\"'"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1472,
+        608
+      ],
+      "id": "sadpay-trigger-0001",
+      "name": "sadpay告警触发",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "W8NbqcmBWoI5MZ3s",
+          "name": "巴基斯坦跳板机"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        864,
+        672
+      ],
+      "id": "sadpay-manual-0001",
+      "name": "When clicking 'Execute workflow'"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "PK_SADPAY_DWD_PUSH",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        864,
+        528
+      ],
+      "id": "sadpay-webhook-0001",
+      "name": "Webhook",
+      "webhookId": "replace-with-generated-webhook-id"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "sadpay告警代码拉取": {
+      "main": [
+        [
+          {
+            "node": "sadpay告警触发",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "sadpay告警代码拉取",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "sadpay告警代码拉取",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "sadpay-alert-version-0001",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9b8dca2625dfded9c94218816984fe8bf5bd91d03aaffc5e971fd46b2e9dc2e8",
+    "platformTemplate": true,
+    "sourceWorkflowName": "巴基斯坦-sadpay推送业务库监控告警",
+    "platformCountry": "pk",
+    "platformRepo": "/root/Global-Intelligent-Alarm-Repair-Assistant",
+    "platformRepoBootstrap": {
+      "repo": "/root/Global-Intelligent-Alarm-Repair-Assistant",
+      "url": "https://github.com/chenjiuxuan1/Global-Intelligent-Alarm-Repair-Assistant.git",
+      "mode": "clone_if_missing_sync_master_before_each_run"
+    }
+  },
+  "id": "PKSadpayDwdPushAlertWorkflow",
+  "tags": []
+}

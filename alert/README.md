@@ -14,6 +14,7 @@
 | `alert_bridge.py` | 告警桥接处理 | 旧版兼容 |
 | `quality_result_query.py` | 质量结果查询 | 详细查询 |
 | `db_config.py` | 数据库配置 | 公共配置 |
+| `pk_sadapay_dwd_push_monitor_alert.py` | 巴基斯坦 sadpay DWD 数据推送任务日志监控告警 | n8n 触发 |
 | `README.md` | 本文件 | - |
 
 ---
@@ -64,8 +65,6 @@ alerts = query_alerts(
 )
 ```
 
-### 发送告警到钉钉
-
 ```python
 from alert.send_alert import send_alert
 
@@ -76,6 +75,26 @@ send_alert(
     content='表数据不一致'
 )
 ```
+
+### 发送 sadpay 推送业务库监控告警（巴基斯坦）
+
+```bash
+# 干跑：只打印消息，不发送
+python3 alert/pk_sadapay_dwd_push_monitor_alert.py --dry-run
+
+# 正式发送（DS token 建议从环境变量 DS_API_TOKEN_PK / DS_TOKEN 提供）
+# 默认发送到 PL 告警测试群（bot 4d0bcc9b-71bf-41c5-ba9f-89b7278f9214）
+python3 alert/pk_sadapay_dwd_push_monitor_alert.py \
+    --bot-id "4d0bcc9b-71bf-41c5-ba9f-89b7278f9214" \
+    --mentions "gretchenhe@kn.group"
+```
+
+该告警扫描巴基斯坦 DolphinScheduler `sadapay_ftp数据接入` 项目下 `DWD` 工作流
+最新一次调度实例中 `dwd_user_sadapay_user_info数据推送` 任务节点的运行日志，
+解析 `读出记录总数 / 读写失败总数` 等 DataX 统计字段并按固定格式发送 TV 告警
+（@何柳琴 = gretchenhe@kn.group）。DS 访问走 n8n ds-scheduler 网关 webhook
+（`DS_SCHEDULER_WEBHOOK_URL`，country=pk）。默认发送到 PL 告警测试群
+（bot `4d0bcc9b-71bf-41c5-ba9f-89b7278f9214`），可通过 `--bot-id` 覆盖。
 
 ---
 
