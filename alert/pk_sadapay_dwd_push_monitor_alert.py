@@ -9,17 +9,20 @@
    解析 接收文件数 / 失败文件数 / 文件类别数 / 各文件类别汇总 / 本次运行结束。
 
 消息格式（与需求一致）：
-    【sadapay数据监控告警】
-    集群: 巴基斯坦
-    接收文件数: 10 个
-    失败文件数：xx个
-    文件类别数：3个
-    Transactions文件记录总数：xxxx条 入库成功数：xx条 入库失败数： xx条
-    Account_Aggregates文件记录总数：xxxx条 入库成功数：xx条 入库失败数： xx条
-    User_Identity文件记录总数：xxxx条 入库成功数：xx条 入库失败数： xx条
-    本次运行结束: downloaded=1, processed=1, failed=0
-    读出记录总数: 10001 条，读写失败总数：0条，
-    告警时间: 2026-08-28 15:12:49
+    【SadaPay 数据监控告警】
+
+    集群：巴基斯坦
+    接收文件：2 个
+    文件类别：2 个
+    失败文件：0 个
+
+    文件处理明细：
+    Account_Aggregates：文件记录 10,004 条｜入库成功 0 条｜入库失败 0 条
+    Transactions：文件记录 191,895 条｜入库成功 0 条｜入库失败 0 条
+
+    推送业务库总数: 10001 条，读写失败总数：0条
+
+    告警时间：2026-08-28 16:44:40
 
 真正的 @ 提醒由 TV API 的 mentions 字段触发（默认 gretchenhe@kn.group = 何柳琴），
 消息正文不再重复写 @ 文本。
@@ -91,7 +94,7 @@ LOG_FIELD_NAMES = [
 FIELD_PATTERN = re.compile(r"(任务启动时刻|任务结束时刻|任务总计耗时|任务平均流量|记录写入速度|读出记录总数|读写失败总数)\s*[:：]\s*([^\r\n]*)")
 
 # 告警消息
-ALERT_TITLE = "【sadapay数据监控告警】"
+ALERT_TITLE = "【SadaPay 数据监控告警】"
 
 # 何柳琴 = gretchenhe@kn.group
 DEFAULT_MENTIONS = ["gretchenhe@kn.group"]
@@ -552,7 +555,7 @@ def format_alert_message(
     cluster_label: str = COUNTRY_LABEL,
     title: str = ALERT_TITLE,
 ) -> str:
-    """组装新格式告警消息。
+    """组装新格式告警消息（分区排版）。
 
     参数：
       summary: DWD 数据推送日志解析出的字段（读出记录总数 / 读写失败总数）
@@ -564,26 +567,29 @@ def format_alert_message(
 
     lines = [
         title,
-        f"集群: {cluster_label}",
+        "",
+        f"集群：{cluster_label}",
     ]
 
     if ftp:
-        lines.append(f"接收文件数: {ftp['receive_files']} 个 ")
-        lines.append(f"失败文件数：{ftp['failed_files']}个")
         categories = ftp.get("categories") or {}
-        lines.append(f"文件类别数：{len(categories)}个")
+        lines.append(f"接收文件：{ftp['receive_files']} 个")
+        lines.append(f"文件类别：{len(categories)} 个")
+        lines.append(f"失败文件：{ftp['failed_files']} 个")
+        lines.append("")
+        lines.append("文件处理明细：")
         for category in categories:
             cat = categories[category]
             lines.append(
-                f"{category}文件记录总数：{cat['record_total']}条 "
-                f"入库成功数：{cat['success']}条 "
-                f"入库失败数： {cat['failed']}条"
+                f"{category}：文件记录 {cat['record_total']:,} 条｜"
+                f"入库成功 {cat['success']:,} 条｜"
+                f"入库失败 {cat['failed']:,} 条"
             )
-        if ftp.get("run_end"):
-            lines.append(f"本次运行结束: {ftp['run_end']}")
+        lines.append("")
 
-    lines.append(f"读出记录总数: {read_total} 条，读写失败总数：{write_failed}条，")
-    lines.append(f"告警时间: {now}")
+    lines.append(f"推送业务库总数: {read_total} 条，读写失败总数：{write_failed}条")
+    lines.append("")
+    lines.append(f"告警时间：{now}")
     return "\n".join(lines)
 
 

@@ -108,10 +108,12 @@ class PkSadapayDwdPushAlertTests(unittest.TestCase):
         message = format_alert_message(summary, alert_time="2026-08-28 11:22:22")
         self.assertEqual(
             message,
-            "【sadapay数据监控告警】\n"
-            "集群: 巴基斯坦\n"
-            "读出记录总数: 3 条，读写失败总数：0条，\n"
-            "告警时间: 2026-08-28 11:22:22",
+            "【SadaPay 数据监控告警】\n"
+            "\n"
+            "集群：巴基斯坦\n"
+            "推送业务库总数: 3 条，读写失败总数：0条\n"
+            "\n"
+            "告警时间：2026-08-28 11:22:22",
         )
         self.assertIn(ALERT_TITLE, message)
         self.assertIn(COUNTRY_LABEL, message)
@@ -122,16 +124,17 @@ class PkSadapayDwdPushAlertTests(unittest.TestCase):
         summary = parse_datax_summary(SAMPLE_DATAX_LOG)
         ftp = parse_ftp_log(SAMPLE_FTP_LOG)
         message = format_alert_message(summary, ftp=ftp, alert_time="2026-08-28 11:22:22")
-        self.assertIn("接收文件数: 3 个 ", message)
-        self.assertIn("失败文件数：1个", message)
-        self.assertIn("文件类别数：3个", message)
-        # 各文件类别汇总行（顺序按解析到的类别顺序）
-        self.assertIn("Account_Aggregates文件记录总数：10004条 入库成功数：10004条 入库失败数： 0条", message)
-        self.assertIn("Transactions文件记录总数：191895条 入库成功数：191895条 入库失败数： 0条", message)
-        self.assertIn("User_Identity文件记录总数：10000条 入库成功数：0条 入库失败数： 10000条", message)
-        self.assertIn("本次运行结束: downloaded=3, processed=3, failed=1", message)
+        self.assertIn("接收文件：3 个", message)
+        self.assertIn("文件类别：3 个", message)
+        self.assertIn("失败文件：1 个", message)
+        self.assertIn("文件处理明细：", message)
+        # 各文件类别汇总行（千分位格式）
+        self.assertIn("Account_Aggregates：文件记录 10,004 条｜入库成功 10,004 条｜入库失败 0 条", message)
+        self.assertIn("Transactions：文件记录 191,895 条｜入库成功 191,895 条｜入库失败 0 条", message)
+        self.assertIn("User_Identity：文件记录 10,000 条｜入库成功 0 条｜入库失败 10,000 条", message)
         # DWD 段仍在
-        self.assertIn("读出记录总数: 3 条，读写失败总数：0条，", message)
+        self.assertIn("推送业务库总数: 3 条，读写失败总数：0条", message)
+        self.assertIn("告警时间：2026-08-28 11:22:22", message)
 
     # ----- ftp2starrocks 日志解析 -----
     def test_parse_ftp_log_extracts_counts_and_categories(self):
