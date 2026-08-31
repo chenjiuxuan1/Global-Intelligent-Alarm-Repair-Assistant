@@ -772,6 +772,27 @@ def resolve_mentions(country: str, task_name: str, configured_mentions: str = ""
     )
 
 
+def _subworkflow_instance_id(task: dict[str, Any]) -> str:
+    """Extract the child process instance id carried by a SUB_WORKFLOW task."""
+    for raw in (task.get("appLink"), task.get("app_link"), task.get("taskParams")):
+        value = raw
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                match = re.search(r"subWorkflowInstanceId\D+(\d+)", value)
+                if match:
+                    return match.group(1)
+                continue
+        if not isinstance(value, dict):
+            continue
+        for key in ("subWorkflowInstanceId", "subProcessInstanceId", "processInstanceId"):
+            candidate = value.get(key)
+            if candidate not in (None, "", 0, "0"):
+                return str(candidate)
+    return ""
+
+
 def fetch_failure_info_from_task_log(
     alert: dict[str, Any],
     ds_token: str,
@@ -802,7 +823,9 @@ def fetch_failure_info_from_task_log(
     )
     lookup_attempts = max(1, int(lookup_attempts))
 
-    def try_task_log(task: dict[str, Any], attempt_label: str) -> tuple[str, str]:
+    def try_task_log(
+        task: dict[str, Any], attempt_label: str, process_instance_id: Any | None = None,
+    ) -> tuple[str, str]:
         """Fetch one task's log and return (reason, task_name) or empty."""
         task_instance_id = task.get("id") or task.get("taskInstanceId")
         if not task_instance_id:
@@ -812,6 +835,8 @@ def fetch_failure_info_from_task_log(
             ds_token,
             {
                 **payload,
+                "instance_id": process_instance_id or payload["instance_id"],
+                "process_instance_id": process_instance_id or payload["process_instance_id"],
                 "task_instance_id": task_instance_id,
                 "task_name": task.get("name") or task.get("taskName") or "",
                 "task_code": task.get("taskCode") or "",
@@ -831,6 +856,54 @@ def fetch_failure_info_from_task_log(
 
     def task_id(task: dict[str, Any]) -> int:
         return int(task.get("id") or task.get("taskInstanceId") or 0)
+
+    def failure_priority(task: dict[str, Any]) -> tuple[int, int]:
+        state = str(task.get("stateDesc") or task.get("state") or "").strip().upper()
+        return (0 if state in {"FAILURE", "FAILED", "ERROR", "6", "失败"} else 1, -task_id(task))
+
+    def try_subworkflow(
+        task: dict[str, Any], attempt_label: str, depth: int = 0, visited: set[str] | None = None,
+    ) -> tuple[str, str]:
+        """Descend through failed SUB_WORKFLOW tasks to the actionable leaf log."""
+        if depth >= 5:
+            return "", ""
+        child_instance_id = _subworkflow_instance_id(task)
+        if not child_instance_id:
+            return "", ""
+        visited = visited or set()
+        if child_instance_id in visited:
+            return "", ""
+        visited.add(child_instance_id)
+        child_payload = {
+            **payload,
+            "instance_id": child_instance_id,
+            "process_instance_id": child_instance_id,
+        }
+        child_tasks: list[dict[str, Any]] = []
+        for page in range(1, max_pages + 1):
+            response = gateway_runner(
+                "list_task_instances",
+                ds_token,
+                {**child_payload, "page_no": page},
+                f"{request_id}-sub-{child_instance_id}-tasks-{attempt_label}-p{page}",
+            )
+            page_tasks = _task_instances_from_response(response)
+            if not page_tasks:
+                break
+            child_tasks.extend(page_tasks)
+        failed_children = [child for child in child_tasks if _is_failed_task(child)]
+        failed_children.sort(key=failure_priority)
+        for child in failed_children:
+            if str(child.get("taskType") or "").strip().upper() == "SUB_WORKFLOW":
+                reason, name = try_subworkflow(
+                    child, attempt_label, depth=depth + 1, visited=visited,
+                )
+                if reason:
+                    return reason, name
+            reason, name = try_task_log(child, attempt_label, child_instance_id)
+            if reason:
+                return reason, name
+        return "", ""
 
     for lookup_index in range(lookup_attempts):
         # Large workflows can put the failed task beyond the first page.  Read
@@ -862,8 +935,12 @@ def fetch_failure_info_from_task_log(
                 )
                 continue
             saw_failed_task = True
-            failed_tasks.sort(key=task_id, reverse=True)
+            failed_tasks.sort(key=failure_priority)
             for task in failed_tasks:
+                if str(task.get("taskType") or "").strip().upper() == "SUB_WORKFLOW":
+                    reason, failed_task_name = try_subworkflow(task, f"{lookup_index + 1}")
+                    if reason:
+                        return reason, failed_task_name
                 reason, failed_task_name = try_task_log(task, f"{lookup_index + 1}")
                 if reason:
                     return reason, failed_task_name

@@ -1140,6 +1140,51 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertIn("SQLState", reason)
         self.assertEqual(page_nos, [1, 2])
 
+    def test_fetch_failure_info_descends_into_failed_subworkflow_leaf_log(self):
+        calls = []
+
+        def gateway(action, token, payload, request_id):
+            calls.append((action, str(payload.get("process_instance_id"))))
+            if action == "list_task_instances" and str(payload["process_instance_id"]) == "2508488":
+                return {
+                    "ok": True,
+                    "stdout": {"data": {"data": {"totalList": [{
+                        "id": 17243554,
+                        "name": "DWD_RSK(1D)",
+                        "taskType": "SUB_WORKFLOW",
+                        "state": "KILL",
+                        "appLink": '{"subWorkflowInstanceId":2508505}',
+                    }]}}},
+                }
+            if action == "list_task_instances" and str(payload["process_instance_id"]) == "2508505":
+                return {
+                    "ok": True,
+                    "stdout": {"data": {"data": {"totalList": [{
+                        "id": 17243561,
+                        "name": "dwd_rsk_pre_event_log",
+                        "taskType": "SHELL",
+                        "state": "FAILURE",
+                    }]}}},
+                }
+            if action == "get_task_log":
+                self.assertEqual(str(payload["process_instance_id"]), "2508505")
+                return {
+                    "ok": True,
+                    "stdout": {"data": {"log": "ERROR - 5025 (HY000): Connection timed out"}},
+                }
+            raise AssertionError(f"unexpected action: {action} {payload}")
+
+        reason, task_name = generic_retry.fetch_failure_info_from_task_log(
+            {"project_code": "169585666733760", "instance_id": "2508488"},
+            "token",
+            "pk-subworkflow",
+            gateway,
+        )
+
+        self.assertEqual(task_name, "dwd_rsk_pre_event_log")
+        self.assertIn("Connection timed out", reason)
+        self.assertIn(("list_task_instances", "2508505"), calls)
+
     def test_fetch_failure_info_stops_after_empty_page(self):
         """An empty first page means the list is empty; no extra pages are requested."""
         calls = []
