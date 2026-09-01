@@ -506,16 +506,17 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
             "simontang@kn.group,jiangchuanchen@kn.group",
         )
 
-        self.assertIn('"projectName":"菲律宾数仓-正式环境"', message)
-        self.assertIn('"workflowInstanceId":2004745', message)
-        self.assertIn('"workflowDefinitionCode":15845044707680', message)
-        self.assertIn('"workflowInstanceName":"菲律宾-数仓工作流（1D）-20260715122501017"', message)
-        self.assertIn('"workflowHost":"10.20.10.12:5678"', message)
+        self.assertTrue(message.startswith("DS 自动触发｜菲律宾"))
+        self.assertIn("项目：菲律宾数仓-正式环境", message)
+        self.assertIn("工作流：菲律宾-数仓工作流（1D）-20260715122501017", message)
+        self.assertIn("实例：2004745", message)
+        self.assertIn("执行主机：10.20.10.12:5678", message)
         self.assertIn("定时任务执行失败，失败原因：SQL执行失败", message)
         self.assertIn("自动重跑已完成 3 次且全部失败", message)
-        self.assertIn("当前状态：FAILURE，需要负责人查看@simontang@kn.group @jiangchuanchen@kn.group", message)
+        self.assertIn("当前状态：FAILURE，需要负责人查看", message)
+        self.assertIn("@simontang@kn.group @jiangchuanchen@kn.group", message)
 
-    def test_generic_retry_progress_message_keeps_raw_array_shape(self):
+    def test_generic_retry_progress_message_uses_explicit_fields(self):
         alert = generic_retry.normalize_alert_payload(
             [
                 {
@@ -530,7 +531,8 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
 
         message = generic_retry.build_retry_progress_message(alert, 1, "任务节点失败")
 
-        self.assertTrue(message.startswith('[{"projectCode":15843450427744'))
+        self.assertTrue(message.startswith("DS 自动触发｜菲律宾"))
+        self.assertIn("项目：菲律宾数仓-正式环境", message)
         self.assertIn("定时任务执行失败，失败原因：任务节点失败", message)
         self.assertIn("目前自动失败重试中，执行次数：1", message)
 

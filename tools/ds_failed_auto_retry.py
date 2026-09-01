@@ -58,6 +58,24 @@ COUNTRY_NAMES = {
 
 SUCCESS_STATES = {"SUCCESS"}
 TERMINAL_FAILURE_STATES = {"FAILURE", "FAILED", "STOP", "KILL", "KILLING", "6"}
+SQL_ERROR_PATTERNS = (
+    r"syntax\s+error", r"sqlsyntaxerrorexception", r"parse\s+exception",
+    r"semantic\s+exception", r"analysis\s+exception", r"unknown\s+column",
+    r"column\s+.+(?:not\s+found|does\s+not\s+exist)",
+    r"table\s+.+(?:not\s+found|does\s+not\s+exist|doesn't\s+exist)",
+    r"no\s+such\s+(?:table|column|function)", r"function\s+.+not\s+found",
+    r"no\s+matching\s+function", r"type\s+mismatch", r"cannot\s+cast",
+    r"incompatible\s+type", r"unsupported\s+operand",
+)
+RECOVERABLE_ERROR_PATTERNS = (
+    r"cpu.+(?:limit|exceed)", r"out\s+of\s+memory", r"oom",
+    r"memory.+(?:limit|exceed|insufficient)", r"exit\s*(?:code)?\s*137",
+    r"killed\s+by\s+(?:signal|oom)", r"resource\s+(?:queue|pool).+(?:full|insufficient|unavailable)",
+    r"no\s+available\s+worker", r"worker.+(?:unavailable|offline|down|lost)",
+    r"connection\s+(?:reset|refused|timed?\s*out|closed)", r"network\s+(?:error|unreachable)",
+    r"temporary\s+(?:failure|unavailable)", r"transient", r"socket\s+hang\s+up",
+    r"broken\s+pipe", r"remote\s+host", r"no\s+associated\s+load\s+channel",
+)
 GENERIC_FAILURE_REASON = "未从 DS 实例详情中解析到明确失败原因，请查看 DS 实例日志"
 FAILED_TASK_STATES = {"FAILURE", "FAILED", "STOP", "STOPPED", "KILL", "KILLING", "ERROR", "5", "6", "9", "失败", "停止"}
 
@@ -106,6 +124,40 @@ def _debug(msg: str) -> None:
     """Write diagnostic info to stderr so it appears in the nohup log file."""
     ts = datetime.now().isoformat(timespec="seconds")
     print(f"[ds-auto-retry] {ts} {msg}", file=sys.stderr, flush=True)
+
+
+def classify_failure_reason(reason: str) -> str:
+    """Classify a task-log reason before deciding whether retry is safe."""
+    normalized = re.sub(r"\s+", " ", str(reason or "")).strip().lower()
+    if not normalized or reason == GENERIC_FAILURE_REASON:
+        return "unknown"
+    if any(re.search(pattern, normalized, re.I) for pattern in SQL_ERROR_PATTERNS):
+        return "sql_error"
+    if any(re.search(pattern, normalized, re.I) for pattern in RECOVERABLE_ERROR_PATTERNS):
+        return "recoverable"
+    return "unknown"
+
+
+def _crossed_local_day(alert: dict[str, Any], now: datetime | None = None) -> bool:
+    raw = str(alert.get("workflow_start_time") or "").strip()
+    if not raw:
+        return False
+    current = now or datetime.now()
+    for candidate in (raw, raw.replace("Z", "+00:00")):
+        try:
+            started = datetime.fromisoformat(candidate)
+            if started.tzinfo is not None and current.tzinfo is None:
+                current = current.astimezone()
+            return started.date() != current.date()
+        except ValueError:
+            continue
+    return False
+
+
+def _workflow_is_offline(result: dict[str, Any]) -> bool:
+    value = _first_nested(result, {"release_state", "releasestate"})
+    normalized = str(value or "").strip().upper()
+    return normalized in {"OFFLINE", "0"}
 
 
 def _is_failure_wrapper_reason(reason: str) -> bool:
@@ -302,6 +354,7 @@ def normalize_alert_payload(raw: Any, country: str = DEFAULT_COUNTRY) -> dict[st
         "execution_status",
         "executionStatus",
     )
+    command_type = first("command_type", "commandType")
     workflow_start_time = first("workflow_start_time", "workflowStartTime", "start_time", "startTime")
     workflow_end_time = first("workflow_end_time", "workflowEndTime", "end_time", "endTime")
     workflow_host = first("workflow_host", "workflowHost", "host")
@@ -319,6 +372,7 @@ def normalize_alert_payload(raw: Any, country: str = DEFAULT_COUNTRY) -> dict[st
         "workflow_definition_code": workflow_definition_code,
         "workflow_name": workflow_name,
         "workflow_execution_status": workflow_execution_status,
+        "command_type": command_type,
         "workflow_start_time": workflow_start_time,
         "workflow_end_time": workflow_end_time,
         "workflow_host": workflow_host,
@@ -1012,6 +1066,46 @@ def _mentions_text(mentions: str) -> str:
     return " ".join(f"@{item.strip().lstrip('@')}" for item in str(mentions or "").split(",") if item.strip())
 
 
+def _auto_trigger_message(
+    alert: dict[str, Any],
+    *,
+    task_label: str,
+    reason_label: str,
+    outcome: str,
+    mentions: str = "",
+) -> str:
+    """Build the compact DS auto-trigger notification shared by every outcome.
+
+    The previous notification started with the raw JSON alert payload. That
+    payload is useful for debugging, but it made the group message hard to
+    read and obscured which chain sent it. Keep the machine-readable values as
+    explicit fields and mark this chain as ``DS 自动触发``.
+    """
+    country = normalize_country(alert.get("country") or DEFAULT_COUNTRY)
+    country_name = COUNTRY_NAMES.get(country, country)
+    failed_task = str(task_label or alert.get("task_name") or "未返回任务节点名称").strip()
+    project = str(alert.get("project_name") or alert.get("project_code") or "-").strip()
+    workflow = str(alert.get("workflow_name") or alert.get("workflow_definition_code") or "-").strip()
+    instance_id = str(alert.get("instance_id") or "-").strip()
+    lines = [
+        f"DS 自动触发｜{country_name}",
+        f"失败任务：{failed_task}",
+        f"项目：{project}",
+        f"工作流：{workflow}",
+        f"实例：{instance_id}",
+        reason_label,
+        outcome,
+    ]
+    if alert.get("workflow_host"):
+        lines.append(f"执行主机：{alert['workflow_host']}")
+    if alert.get("workflow_instance_url") or alert.get("ds_instance_url"):
+        lines.append(f"工作流实例：{alert.get('workflow_instance_url') or alert.get('ds_instance_url')}")
+    mention_text = _mentions_text(mentions)
+    if mention_text:
+        lines.append(mention_text)
+    return "\n".join(lines)
+
+
 def build_retry_progress_message(
     alert: dict[str, Any],
     attempts: int,
@@ -1020,13 +1114,12 @@ def build_retry_progress_message(
     task_name: str = "",
 ) -> str:
     failed_task = str(task_name or alert.get("task_name") or "").strip()
-    return "\n".join(
-        [
-            _alert_payload_text(alert, unwrap_single=False),
-            *([f"失败任务：{failed_task}"] if failed_task else []),
-            f"定时任务执行失败，失败原因：{reason or '未从 DS 实例详情中解析到明确失败原因，请查看 DS 实例日志'}",
-            f"目前自动失败重试中，执行次数：{attempts}{_mentions_text(mentions)}",
-        ]
+    return _auto_trigger_message(
+        alert,
+        task_label=failed_task,
+        reason_label=f"定时任务执行失败，失败原因：{reason or GENERIC_FAILURE_REASON}",
+        outcome=f"目前自动失败重试中，执行次数：{attempts}",
+        mentions=mentions,
     )
 
 
@@ -1042,16 +1135,12 @@ def build_failure_message(
     reason = failure_reason or extract_failure_reason(last_result)
     failed_task = str(task_name or alert.get("task_name") or "").strip()
     tail = f"自动重跑已完成 {attempts} 次且全部失败，重跑次数：{attempts}，当前状态：{state}，需要负责人查看"
-    mention_text = _mentions_text(mentions)
-    if mention_text:
-        tail = f"{tail}{mention_text}"
-    return "\n".join(
-        [
-            _alert_payload_text(alert),
-            *([f"失败任务：{failed_task}"] if failed_task else []),
-            f"定时任务执行失败，失败原因：{reason}",
-            tail,
-        ]
+    return _auto_trigger_message(
+        alert,
+        task_label=failed_task,
+        reason_label=f"定时任务执行失败，失败原因：{reason or GENERIC_FAILURE_REASON}",
+        outcome=tail,
+        mentions=mentions,
     )
 
 
@@ -1068,16 +1157,12 @@ def build_timeout_message(
         f"已停止自动重跑和监控，实际重跑次数：{attempts}，当前状态：{state}，"
         "需要负责人查看"
     )
-    mention_text = _mentions_text(mentions)
-    if mention_text:
-        tail = f"{tail}{mention_text}"
-    return "\n".join(
-        [
-            _alert_payload_text(alert),
-            *([f"失败任务：{failed_task}"] if failed_task else []),
-            f"定时任务 30 分钟内未恢复，失败原因：{reason or GENERIC_FAILURE_REASON}",
-            tail,
-        ]
+    return _auto_trigger_message(
+        alert,
+        task_label=failed_task,
+        reason_label=f"定时任务 30 分钟内未恢复，失败原因：{reason or GENERIC_FAILURE_REASON}",
+        outcome=tail,
+        mentions=mentions,
     )
 
 
@@ -1090,16 +1175,12 @@ def build_recovered_message(
 ) -> str:
     failed_task = str(task_name or alert.get("task_name") or "").strip()
     tail = f"自动重跑已恢复成功，重跑次数：{attempts}"
-    mention_text = _mentions_text(mentions)
-    if mention_text:
-        tail = f"{tail}{mention_text}"
-    return "\n".join(
-        [
-            _alert_payload_text(alert),
-            *([f"原失败任务：{failed_task}"] if failed_task else []),
-            f"定时任务原失败原因：{reason or GENERIC_FAILURE_REASON}",
-            tail,
-        ]
+    return _auto_trigger_message(
+        alert,
+        task_label=failed_task,
+        reason_label=f"定时任务原失败原因：{reason or GENERIC_FAILURE_REASON}",
+        outcome=tail,
+        mentions=mentions,
     )
 
 
@@ -1112,16 +1193,12 @@ def build_still_running_message(
 ) -> str:
     failed_task = str(task_name or alert.get("task_name") or "").strip()
     tail = f"自动重跑后任务仍在运行中，重跑次数：{attempts}"
-    mention_text = _mentions_text(mentions)
-    if mention_text:
-        tail = f"{tail}{mention_text}"
-    return "\n".join(
-        [
-            _alert_payload_text(alert),
-            *([f"原失败任务：{failed_task}"] if failed_task else []),
-            f"定时任务原失败原因：{reason or GENERIC_FAILURE_REASON}",
-            tail,
-        ]
+    return _auto_trigger_message(
+        alert,
+        task_label=failed_task,
+        reason_label=f"定时任务原失败原因：{reason or GENERIC_FAILURE_REASON}",
+        outcome=tail,
+        mentions=mentions,
     )
 
 
@@ -1142,7 +1219,7 @@ def build_country_unhealthy_message(
     mention_text = _mentions_text(mentions)
     if mention_text:
         tail = f"{tail}{mention_text}"
-    return f"{country_name} {tail}"
+    return f"DS 自动触发｜{country_name}\n{tail}"
 
 
 def build_failure_debug_message(alert: dict[str, Any], attempts: int, state: str, last_result: dict[str, Any]) -> str:
@@ -1194,14 +1271,14 @@ def auto_retry(
     reason_lookup_delay_seconds = max(0, int(os.getenv("DS_FAILED_REASON_LOOKUP_DELAY_SECONDS", "5")))
     monitor_interval_seconds = max(1, int(os.getenv("DS_FAILED_MONITOR_INTERVAL_SECONDS", "60")))
     instance_timeout_seconds = max(
-        1,
+        0,
         int(
             os.getenv("DS_FAILED_INSTANCE_TIMEOUT_SECONDS")
             or os.getenv("DS_FAILED_MONITOR_TIMEOUT_SECONDS")
             or "1800"
         ),
     )
-    deadline = monotonic() + instance_timeout_seconds
+    deadline = monotonic() + instance_timeout_seconds if instance_timeout_seconds > 0 else None
     gateway_runner = gateway_runner or (
         lambda action, token, payload, request_id: run_gateway_action(
             action,
@@ -1231,7 +1308,8 @@ def auto_retry(
 
     retry_key = alert["retry_key"]
     initial_attempts = current_attempts(state_file, retry_key)
-    if initial_attempts >= max_attempts:
+    limited_attempts = max_attempts > 0
+    if limited_attempts and initial_attempts >= max_attempts:
         if max_attempts_notified(state_file, retry_key):
             return {
                 "success": True,
@@ -1292,9 +1370,12 @@ def auto_retry(
     last_mentions = failure_context(state_file, retry_key)["mentions"]
 
     def timed_out() -> bool:
-        return monotonic() >= deadline
+        return deadline is not None and monotonic() >= deadline
 
     def sleep_with_deadline(seconds: int) -> bool:
+        if deadline is None:
+            sleep(max(0, seconds))
+            return True
         remaining = deadline - monotonic()
         if remaining <= 0:
             return False
@@ -1426,7 +1507,9 @@ def auto_retry(
             if state in TERMINAL_FAILURE_STATES:
                 return None
 
-    while attempts < max_attempts:
+    while not limited_attempts or attempts < max_attempts:
+        if _crossed_local_day(alert):
+            return {"success": False, "status": "stopped_crossed_day", "attempts": attempts}
         if timed_out():
             return finish_timeout()
         if monitor_guard is not None:
@@ -1446,6 +1529,20 @@ def auto_retry(
             "instance_id": alert["instance_id"],
             "process_instance_id": alert["instance_id"],
         }
+        workflow_code = str(alert.get("workflow_definition_code") or "").strip()
+        if workflow_code:
+            workflow_result = gateway_runner(
+                "get_workflow",
+                ds_token,
+                {"project_code": alert["project_code"], "workflow_code": workflow_code},
+                f"{request_id}-workflow-state",
+            )
+            if workflow_result.get("ok") and _workflow_is_offline(workflow_result):
+                return {
+                    "success": False,
+                    "status": "stopped_workflow_offline",
+                    "attempts": attempts,
+                }
         pre_check_result = gateway_runner("get_instance", ds_token, payload, f"{request_id}-before")
         last_result = pre_check_result
         state = extract_instance_state(pre_check_result)
@@ -1467,6 +1564,45 @@ def auto_retry(
             # downstream exception with no failed-node identity.
             progress_reason = fetched_reason or progress_reason
             task_name = fetched_task_name or task_name
+        if state in SUCCESS_STATES:
+            cached_context = failure_context(state_file, retry_key)
+            return finish_recovered(
+                cached_context["reason"] or progress_reason,
+                cached_context["mentions"],
+                cached_context["task_name"] or task_name,
+            )
+        failure_type = classify_failure_reason(progress_reason)
+        command_type = str(alert.get("command_type") or "").strip().upper()
+        manually_stopped = command_type in {"STOP", "KILL", "MANUAL_STOP", "MANUAL_KILL"}
+        if manually_stopped:
+            return {
+                "success": False,
+                "status": "stopped_by_operator",
+                "attempts": attempts,
+                "state": state,
+                "failure_reason": progress_reason,
+            }
+        if failure_type == "sql_error":
+            record_failure_context(state_file, retry_key, progress_reason, "", task_name)
+            return {
+                "success": False,
+                "status": "sql_error_manual_fix",
+                "retry_required": False,
+                "attempts": attempts,
+                "state": state,
+                "failure_reason": progress_reason,
+                "task_name": task_name,
+            }
+        if failure_type != "recoverable":
+            return {
+                "success": False,
+                "status": "unknown_error_manual_review",
+                "retry_required": False,
+                "attempts": attempts,
+                "state": state,
+                "failure_reason": progress_reason,
+                "task_name": task_name,
+            }
         cached_context = failure_context(state_file, retry_key)
         mentions = cached_context["mentions"] or resolve_mentions(
             country, task_name, tv_config["mentions"]
@@ -1664,8 +1800,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--payload-b64", required=True)
     parser.add_argument("--ds-token", default="")
     parser.add_argument("--request-id", default="")
-    parser.add_argument("--max-attempts", type=int, default=int(os.getenv("DS_FAILED_MAX_RETRIES", "3")))
-    parser.add_argument("--retry-delay-seconds", type=int, default=int(os.getenv("DS_FAILED_RETRY_DELAY_SECONDS", "180")))
+    parser.add_argument("--max-attempts", type=int, default=int(os.getenv("DS_FAILED_MAX_RETRIES", "0")))
+    parser.add_argument("--retry-delay-seconds", type=int, default=int(os.getenv("DS_FAILED_RETRY_DELAY_SECONDS", "10")))
     parser.add_argument("--state-file", default="")
     args = parser.parse_args(argv)
 
