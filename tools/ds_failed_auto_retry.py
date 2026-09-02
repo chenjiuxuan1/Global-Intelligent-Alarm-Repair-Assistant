@@ -1079,7 +1079,8 @@ def _auto_trigger_message(
     The previous notification started with the raw JSON alert payload. That
     payload is useful for debugging, but it made the group message hard to
     read and obscured which chain sent it. Keep the machine-readable values as
-    explicit fields and mark this chain as ``DS 自动触发``.
+    explicit fields and use the same ``n8n 失败重启监控`` heading as the ZNZB
+    page notification.
     """
     country = normalize_country(alert.get("country") or DEFAULT_COUNTRY)
     country_name = COUNTRY_NAMES.get(country, country)
@@ -1088,7 +1089,7 @@ def _auto_trigger_message(
     workflow = str(alert.get("workflow_name") or alert.get("workflow_definition_code") or "-").strip()
     instance_id = str(alert.get("instance_id") or "-").strip()
     lines = [
-        f"DS 自动触发｜{country_name}",
+        f"n8n 失败重启监控｜{country_name}",
         f"失败任务：{failed_task}",
         f"项目：{project}",
         f"工作流：{workflow}",
@@ -1134,7 +1135,7 @@ def build_failure_message(
 ) -> str:
     reason = failure_reason or extract_failure_reason(last_result)
     failed_task = str(task_name or alert.get("task_name") or "").strip()
-    tail = f"自动重跑已完成 {attempts} 次且全部失败，重跑次数：{attempts}，当前状态：{state}，需要负责人查看"
+    tail = f"自动重跑仍未恢复：重跑次数：{attempts}，当前状态：{state}，需要负责人查看"
     return _auto_trigger_message(
         alert,
         task_label=failed_task,
@@ -1154,13 +1155,13 @@ def build_timeout_message(
 ) -> str:
     failed_task = str(task_name or alert.get("task_name") or "").strip()
     tail = (
-        f"已停止自动重跑和监控，实际重跑次数：{attempts}，当前状态：{state}，"
+        f"自动重跑仍未恢复：已停止自动重跑和监控，实际重跑次数：{attempts}，当前状态：{state}，"
         "需要负责人查看"
     )
     return _auto_trigger_message(
         alert,
         task_label=failed_task,
-        reason_label=f"定时任务 30 分钟内未恢复，失败原因：{reason or GENERIC_FAILURE_REASON}",
+        reason_label=f"定时任务执行失败，失败原因：{reason or GENERIC_FAILURE_REASON}",
         outcome=tail,
         mentions=mentions,
     )
@@ -1178,7 +1179,7 @@ def build_recovered_message(
     return _auto_trigger_message(
         alert,
         task_label=failed_task,
-        reason_label=f"定时任务原失败原因：{reason or GENERIC_FAILURE_REASON}",
+        reason_label=f"定时任务执行失败，失败原因：{reason or GENERIC_FAILURE_REASON}",
         outcome=tail,
         mentions=mentions,
     )
@@ -1196,7 +1197,7 @@ def build_still_running_message(
     return _auto_trigger_message(
         alert,
         task_label=failed_task,
-        reason_label=f"定时任务原失败原因：{reason or GENERIC_FAILURE_REASON}",
+        reason_label=f"定时任务执行失败，失败原因：{reason or GENERIC_FAILURE_REASON}",
         outcome=tail,
         mentions=mentions,
     )
@@ -1219,7 +1220,7 @@ def build_country_unhealthy_message(
     mention_text = _mentions_text(mentions)
     if mention_text:
         tail = f"{tail}{mention_text}"
-    return f"DS 自动触发｜{country_name}\n{tail}"
+    return f"n8n 失败重启监控｜{country_name}\n{tail}"
 
 
 def build_failure_debug_message(alert: dict[str, Any], attempts: int, state: str, last_result: dict[str, Any]) -> str:

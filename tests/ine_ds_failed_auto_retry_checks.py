@@ -373,7 +373,7 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
         self.assertIn("目前自动失败重试中，执行次数：1", tv_messages[0])
         self.assertIn("目前自动失败重试中，执行次数：2", tv_messages[1])
         self.assertIn("目前自动失败重试中，执行次数：3", tv_messages[2])
-        self.assertIn("自动重跑已完成 3 次且全部失败", tv_messages[3])
+        self.assertIn("自动重跑仍未恢复：重跑次数：3", tv_messages[3])
         self.assertIn("当前状态：FAILURE", tv_messages[3])
         self.assertIn("INE-DWD", tv_messages[3])
 
@@ -506,13 +506,13 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
             "simontang@kn.group,jiangchuanchen@kn.group",
         )
 
-        self.assertTrue(message.startswith("DS 自动触发｜菲律宾"))
+        self.assertTrue(message.startswith("n8n 失败重启监控｜菲律宾"))
         self.assertIn("项目：菲律宾数仓-正式环境", message)
         self.assertIn("工作流：菲律宾-数仓工作流（1D）-20260715122501017", message)
         self.assertIn("实例：2004745", message)
         self.assertIn("执行主机：10.20.10.12:5678", message)
         self.assertIn("定时任务执行失败，失败原因：SQL执行失败", message)
-        self.assertIn("自动重跑已完成 3 次且全部失败", message)
+        self.assertIn("自动重跑仍未恢复：重跑次数：3", message)
         self.assertIn("当前状态：FAILURE，需要负责人查看", message)
         self.assertIn("@simontang@kn.group @jiangchuanchen@kn.group", message)
 
@@ -531,7 +531,7 @@ class IneDsFailedAutoRetryChecks(unittest.TestCase):
 
         message = generic_retry.build_retry_progress_message(alert, 1, "任务节点失败")
 
-        self.assertTrue(message.startswith("DS 自动触发｜菲律宾"))
+        self.assertTrue(message.startswith("n8n 失败重启监控｜菲律宾"))
         self.assertIn("项目：菲律宾数仓-正式环境", message)
         self.assertIn("定时任务执行失败，失败原因：任务节点失败", message)
         self.assertIn("目前自动失败重试中，执行次数：1", message)
