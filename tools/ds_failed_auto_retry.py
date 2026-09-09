@@ -71,7 +71,8 @@ SQL_ERROR_PATTERNS = (
 RECOVERABLE_ERROR_PATTERNS = (
     r"cpu.+(?:limit|exceed)", r"out\s+of\s+memory", r"oom",
     r"memory.+(?:limit|exceed|insufficient)", r"exit\s*(?:code)?\s*137",
-    r"killed\s+by\s+(?:signal|oom)", r"resource\s+(?:queue|pool).+(?:full|insufficient|unavailable)",
+    r"killed\s+by\s+(?:signal|oom)", r"killed\s+by\s+kill\s+statement",
+    r"resource\s+(?:queue|pool).+(?:full|insufficient|unavailable)",
     r"no\s+available\s+worker", r"worker.+(?:unavailable|offline|down|lost)",
     r"connection\s+(?:reset|refused|timed?\s*out|closed)", r"network\s+(?:error|unreachable)",
     r"temporary\s+(?:failure|unavailable)", r"transient", r"socket\s+hang\s+up",
