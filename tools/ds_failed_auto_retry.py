@@ -66,6 +66,7 @@ SQL_ERROR_PATTERNS = (
     r"no\s+such\s+(?:table|column|function)", r"function\s+.+not\s+found",
     r"no\s+matching\s+function", r"type\s+mismatch", r"cannot\s+cast",
     r"incompatible\s+type", r"unsupported\s+operand",
+    r"filtered\s+data\s+in\s+strict\s+mode",
 )
 RECOVERABLE_ERROR_PATTERNS = (
     r"cpu.+(?:limit|exceed)", r"out\s+of\s+memory", r"oom",
@@ -1167,6 +1168,35 @@ def build_timeout_message(
     )
 
 
+def build_manual_review_message(
+    alert: dict[str, Any],
+    attempts: int,
+    state: str,
+    reason: str,
+    stop_label: str,
+    mentions: str = "",
+    task_name: str = "",
+) -> str:
+    """Build the manual-review notification for non-recoverable failures.
+
+    Sent when the auto-retry program decides the failure cannot be recovered
+    automatically (unknown error / SQL error / operator stop) and stops
+    retrying, so owners are alerted instead of the run silently ending.
+    """
+    failed_task = str(task_name or alert.get("task_name") or "").strip()
+    tail = (
+        f"自动重跑已停止：{stop_label}，当前状态：{state}，"
+        f"实际重跑次数：{attempts}，需要负责人确认处理"
+    )
+    return _auto_trigger_message(
+        alert,
+        task_label=failed_task,
+        reason_label=f"定时任务执行失败，失败原因：{reason or GENERIC_FAILURE_REASON}",
+        outcome=tail,
+        mentions=mentions,
+    )
+
+
 def build_recovered_message(
     alert: dict[str, Any],
     attempts: int,
@@ -1576,15 +1606,48 @@ def auto_retry(
         command_type = str(alert.get("command_type") or "").strip().upper()
         manually_stopped = command_type in {"STOP", "KILL", "MANUAL_STOP", "MANUAL_KILL"}
         if manually_stopped:
+            mentions = resolve_mentions(country, task_name, tv_config["mentions"])
+            if not final_result_notified(state_file, retry_key):
+                tv_result = tv_sender(
+                    build_manual_review_message(
+                        alert,
+                        attempts,
+                        state,
+                        progress_reason,
+                        stop_label="任务被人为停止",
+                        mentions=mentions,
+                        task_name=task_name,
+                    )
+                )
+                mark_final_result_notified(state_file, retry_key, "stopped_by_operator")
+            else:
+                tv_result = None
             return {
                 "success": False,
                 "status": "stopped_by_operator",
                 "attempts": attempts,
                 "state": state,
                 "failure_reason": progress_reason,
+                "tv_result": tv_result,
             }
         if failure_type == "sql_error":
             record_failure_context(state_file, retry_key, progress_reason, "", task_name)
+            mentions = resolve_mentions(country, task_name, tv_config["mentions"])
+            if not final_result_notified(state_file, retry_key):
+                tv_result = tv_sender(
+                    build_manual_review_message(
+                        alert,
+                        attempts,
+                        state,
+                        progress_reason,
+                        stop_label="SQL 错误需人工修复",
+                        mentions=mentions,
+                        task_name=task_name,
+                    )
+                )
+                mark_final_result_notified(state_file, retry_key, "sql_error_manual_fix")
+            else:
+                tv_result = None
             return {
                 "success": False,
                 "status": "sql_error_manual_fix",
@@ -1593,8 +1656,25 @@ def auto_retry(
                 "state": state,
                 "failure_reason": progress_reason,
                 "task_name": task_name,
+                "tv_result": tv_result,
             }
         if failure_type != "recoverable":
+            mentions = resolve_mentions(country, task_name, tv_config["mentions"])
+            if not final_result_notified(state_file, retry_key):
+                tv_result = tv_sender(
+                    build_manual_review_message(
+                        alert,
+                        attempts,
+                        state,
+                        progress_reason,
+                        stop_label="遇到未知错误需人工确认",
+                        mentions=mentions,
+                        task_name=task_name,
+                    )
+                )
+                mark_final_result_notified(state_file, retry_key, "unknown_error_manual_review")
+            else:
+                tv_result = None
             return {
                 "success": False,
                 "status": "unknown_error_manual_review",
@@ -1603,6 +1683,7 @@ def auto_retry(
                 "state": state,
                 "failure_reason": progress_reason,
                 "task_name": task_name,
+                "tv_result": tv_result,
             }
         cached_context = failure_context(state_file, retry_key)
         mentions = cached_context["mentions"] or resolve_mentions(
