@@ -247,7 +247,8 @@ class N8nWorkflowTemplateTests(unittest.TestCase):
 
         expected_exports = {
             "DS_FAILED_MAX_RETRIES": "3",
-            "DS_FAILED_INSTANCE_TIMEOUT_SECONDS": "1800",
+            # 单实例总监控窗口 4 小时（2026-09 对齐：重跑策略 3 次上限 + 4 小时监控窗口）
+            "DS_FAILED_INSTANCE_TIMEOUT_SECONDS": "14400",
             "DS_FAILED_MONITOR_INTERVAL_SECONDS": "60",
             "DS_FAILED_COUNTRY_ACTIVE_LIMIT": "10",
             "DS_FAILED_COUNTRY_CIRCUIT_SECONDS": "1800",
