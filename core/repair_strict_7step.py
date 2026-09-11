@@ -68,6 +68,29 @@ AD_PLATFORM_PROJECT_NAME_KEYWORD = str(
     REPAIR_CONFIG.get('ad_platform_project_name_keyword') or '投放平台'
 ).strip()
 AD_PLATFORM_PROJECT_CODES = REPAIR_CONFIG.get('ad_platform_project_codes') or []
+# 各国“投放平台”项目标准名称（除中国外）：印尼/墨西哥/泰国/菲律宾/巴基斯坦
+AD_PLATFORM_PROJECT_NAMES = {
+    str(country).strip().lower(): str(name).strip()
+    for country, name in (REPAIR_CONFIG.get('ad_platform_project_names') or {}).items()
+    if str(country).strip() and str(name).strip()
+}
+_COUNTRY_ALIASES = {
+    'china': 'cn', 'cn': 'cn',
+    'thailand': 'th', 'tha': 'th', 'th': 'th',
+    'indonesia': 'ine', 'indo': 'ine', 'id': 'ine', 'ine': 'ine',
+    'pakistan': 'pk', 'pak': 'pk', 'pk': 'pk',
+    'mexico': 'mx', 'mex': 'mx', 'mx': 'mx',
+    'philippines': 'ph', 'philippine': 'ph', 'ph': 'ph',
+}
+
+
+def _resolve_current_country():
+    """解析当前运行环境的国家标识（与 config.config 的口径一致）。"""
+    raw = os.environ.get('APP_COUNTRY') or os.environ.get('COUNTRY') or ''
+    return _COUNTRY_ALIASES.get(str(raw).strip().lower(), str(raw).strip().lower())
+
+
+APP_COUNTRY = _resolve_current_country()
 AD_COMPLEMENT_SCHEDULE_OFFSET_DAYS = int(REPAIR_CONFIG.get('ad_complement_schedule_offset_days', 1))
 AD_COMPLEMENT_MAX_DAYS = int(REPAIR_CONFIG.get('ad_complement_max_days', 10))
 _AD_PLATFORM_PROJECTS_CACHE = None
@@ -667,7 +690,15 @@ def list_all_projects():
 
 
 def get_ad_platform_projects():
-    """解析各国“投放平台”项目：优先显式配置的项目 code，否则按项目名关键字自动发现。"""
+    """解析各国“投放平台”项目。
+
+    解析顺序：
+    1. 显式配置的项目 code（DS_AD_PLATFORM_PROJECT_CODES_JSON）；
+    2. 各国标准项目名精确匹配（印尼-投放平台 / 墨西哥-投放平台 / 泰国-投放平台 /
+       菲律宾-投放平台 / 巴基斯坦-投放平台，可用 DS_AD_PLATFORM_PROJECT_NAMES_JSON 覆盖）；
+       中国（cn）不启用投放平台搜索，保持原有主项目 + 传 dt 逻辑不变；
+    3. 按关键字“投放平台”模糊匹配兜底（国家未知或项目改名时）。
+    """
     global _AD_PLATFORM_PROJECTS_CACHE
     if _AD_PLATFORM_PROJECTS_CACHE is not None:
         return _AD_PLATFORM_PROJECTS_CACHE
@@ -688,18 +719,50 @@ def get_ad_platform_projects():
         _AD_PLATFORM_PROJECTS_CACHE = configured
         return configured
 
-    matched = []
+    if APP_COUNTRY == 'cn':
+        # 中国不启用投放平台项目搜索与补数，行为与调整前完全一致。
+        _AD_PLATFORM_PROJECTS_CACHE = []
+        return _AD_PLATFORM_PROJECTS_CACHE
+
     projects = list_all_projects()
-    for project in projects:
-        if AD_PLATFORM_PROJECT_NAME_KEYWORD and AD_PLATFORM_PROJECT_NAME_KEYWORD in project['name']:
-            matched.append(project)
+
+    def match_projects(predicate):
+        return [project for project in projects if predicate(project['name'])]
+
+    if APP_COUNTRY and APP_COUNTRY in AD_PLATFORM_PROJECT_NAMES:
+        exact_name = AD_PLATFORM_PROJECT_NAMES[APP_COUNTRY]
+        matched = match_projects(lambda name: name.strip() == exact_name)
+        if matched:
+            log(f"📌 投放平台项目({APP_COUNTRY}) 精确匹配: {[(p['name'], p['code']) for p in matched]}")
+            _AD_PLATFORM_PROJECTS_CACHE = matched
+            return _AD_PLATFORM_PROJECTS_CACHE
+    elif not APP_COUNTRY and AD_PLATFORM_PROJECT_NAMES:
+        # 国家未知时按全部已知标准名匹配
+        known_names = set(AD_PLATFORM_PROJECT_NAMES.values())
+        matched = match_projects(lambda name: name.strip() in known_names)
+        if matched:
+            log(f"📌 投放平台项目(按标准名匹配): {[(p['name'], p['code']) for p in matched]}")
+            _AD_PLATFORM_PROJECTS_CACHE = matched
+            return _AD_PLATFORM_PROJECTS_CACHE
+
+    # 兜底：按关键字模糊匹配（例如项目改名或新增国家未维护标准名）
+    matched = []
+    if AD_PLATFORM_PROJECT_NAME_KEYWORD:
+        matched = match_projects(
+            lambda name: AD_PLATFORM_PROJECT_NAME_KEYWORD in name
+        )
 
     _AD_PLATFORM_PROJECTS_CACHE = matched
     if matched:
-        log(f"📌 自动发现投放平台项目: {[(p['name'], p['code']) for p in matched]}")
+        log(
+            f"📌 投放平台项目(按关键字“{AD_PLATFORM_PROJECT_NAME_KEYWORD}”兜底匹配): "
+            f"{[(p['name'], p['code']) for p in matched]}"
+        )
     else:
         log(
-            f"⚠️ 未在可访问项目列表中发现名称含“{AD_PLATFORM_PROJECT_NAME_KEYWORD}”的投放平台项目，"
+            f"⚠️ 未在可访问项目列表中发现投放平台项目"
+            f"(国家={APP_COUNTRY or '未知'}, 标准名={AD_PLATFORM_PROJECT_NAMES}, "
+            f"关键字={AD_PLATFORM_PROJECT_NAME_KEYWORD})，"
             f"投放相关表将回退按原逻辑搜索主项目"
         )
     return matched
@@ -2548,7 +2611,16 @@ def step3_start_repair(tasks):
         }
         complement_start = task.get('complement_start')
         complement_end = task.get('complement_end')
-        if task.get('repair_mode') == 'complement_data' and complement_start and complement_end:
+        # 双重保险：仅当“投放相关表 + 命中投放平台项目 + 补数范围完整”时才用补数；
+        # 其余一律保持原有传 dt 的修复方式。
+        use_complement = (
+            task.get('repair_mode') == 'complement_data'
+            and bool(complement_start)
+            and bool(complement_end)
+            and project_code != str(PROJECT_CODE)
+            and is_ad_platform_table(table)
+        )
+        if use_complement:
             log(f"  🧮 补数模式: 调度时间范围 {complement_start} ~ {complement_end}（不传 dt）")
             success, result, msg, used_endpoint, used_payload, launched_at = start_workflow_complement_with_fallbacks(
                 project_code,
@@ -2559,8 +2631,8 @@ def step3_start_repair(tasks):
                 table=table,
             )
         else:
-            if task.get('repair_mode') == 'complement_data':
-                log("  ⚠️ 补数时间范围缺失，回退为传 dt 启动")
+            if task.get('repair_mode') == 'complement_data' and not use_complement:
+                log("  ⚠️ 不满足补数条件（非投放表/主项目命中/补数范围缺失），回退为传 dt 启动")
             success, result, msg, used_endpoint, used_payload, launched_at = start_workflow_instance_with_fallbacks(
                 project_code,
                 workflow_code,

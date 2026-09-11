@@ -3677,6 +3677,8 @@ class RepairStrict7StepTests(unittest.TestCase):
     def test_get_ad_platform_projects_discovers_by_name_keyword(self):
         module = load_module()
         module.AD_PLATFORM_PROJECT_CODES = []
+        module.AD_PLATFORM_PROJECT_NAMES = {}
+        module.APP_COUNTRY = ""
         module.AD_PLATFORM_PROJECT_NAME_KEYWORD = "投放平台"
         module.reset_ad_platform_projects_cache()
         ds_calls = []
@@ -3702,6 +3704,79 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(projects, [{"code": "333", "name": "泰国-投放平台"}])
         self.assertEqual(cached_projects, projects)
         self.assertEqual(len(ds_calls), 1)
+
+    def test_get_ad_platform_projects_matches_country_exact_name(self):
+        """按用户提供的各国标准名精确匹配，且只匹配当前国家的投放平台项目。"""
+        module = load_module()
+        module.AD_PLATFORM_PROJECT_CODES = []
+        module.AD_PLATFORM_PROJECT_NAMES = {
+            "ine": "印尼-投放平台",
+            "mx": "墨西哥-投放平台",
+            "th": "泰国-投放平台",
+            "ph": "菲律宾-投放平台",
+            "pk": "巴基斯坦-投放平台",
+        }
+        module.APP_COUNTRY = "th"
+        module.reset_ad_platform_projects_cache()
+
+        def fake_ds_api_get(endpoint):
+            if endpoint.startswith("/projects?pageNo="):
+                return True, {
+                    "totalList": [
+                        {"code": 111, "name": "泰国数仓-工作流"},
+                        {"code": 333, "name": "泰国-投放平台"},
+                        {"code": 444, "name": "印尼-投放平台"},
+                    ],
+                    "totalPage": 1,
+                }, ""
+            raise AssertionError(endpoint)
+
+        with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get), \
+            mock.patch.object(module, "log"):
+            projects = module.get_ad_platform_projects()
+
+        self.assertEqual(projects, [{"code": "333", "name": "泰国-投放平台"}])
+
+    def test_get_ad_platform_projects_disabled_for_cn(self):
+        """中国不启用投放平台搜索，保持原有主项目 + 传 dt 逻辑。"""
+        module = load_module()
+        module.AD_PLATFORM_PROJECT_CODES = []
+        module.APP_COUNTRY = "cn"
+        module.reset_ad_platform_projects_cache()
+
+        with mock.patch.object(module, "ds_api_get", side_effect=AssertionError("中国不应调用项目列表")), \
+            mock.patch.object(module, "log"):
+            projects = module.get_ad_platform_projects()
+
+        self.assertEqual(projects, [])
+
+    def test_get_ad_platform_projects_falls_back_to_keyword_for_unknown_country(self):
+        module = load_module()
+        module.AD_PLATFORM_PROJECT_CODES = []
+        module.AD_PLATFORM_PROJECT_NAMES = {
+            "ine": "印尼-投放平台",
+            "th": "泰国-投放平台",
+        }
+        module.APP_COUNTRY = ""
+        module.AD_PLATFORM_PROJECT_NAME_KEYWORD = "投放平台"
+        module.reset_ad_platform_projects_cache()
+
+        def fake_ds_api_get(endpoint):
+            if endpoint.startswith("/projects?pageNo="):
+                return True, {
+                    "totalList": [
+                        {"code": 111, "name": "泰国数仓-工作流"},
+                        {"code": 555, "name": "泰国投放平台"},  # 改名后不带横杠，标准名匹配不到
+                    ],
+                    "totalPage": 1,
+                }, ""
+            raise AssertionError(endpoint)
+
+        with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get), \
+            mock.patch.object(module, "log"):
+            projects = module.get_ad_platform_projects()
+
+        self.assertEqual(projects, [{"code": "555", "name": "泰国投放平台"}])
 
     def test_get_ad_platform_projects_prefers_configured_codes(self):
         module = load_module()
@@ -3846,6 +3921,7 @@ class RepairStrict7StepTests(unittest.TestCase):
 
     def test_step3_start_repair_uses_complement_mode_for_ad_platform_task(self):
         module = load_module()
+        module.AD_TABLE_PREFIXES = ("dwd_ad_",)
         tasks = [
             {
                 "table": "dwd_ad_fb_ad_insight_impression_age_gender",
@@ -3887,8 +3963,48 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(results[0]["instance_id"], 555000)
         self.assertEqual(running_instances[0]["project_code"], "ad-proj")
 
+    def test_step3_start_repair_keeps_dt_for_non_ad_table_even_if_marked_complement(self):
+        """非投放相关表绝不走补数（即使任务被错误标记为补数模式）。"""
+        module = load_module()
+        module.AD_TABLE_PREFIXES = ("dwd_ad_",)
+        tasks = [
+            {
+                "table": "dwd_user_info",
+                "dt": "2026-09-10",
+                "workflow_code": "wf-main",
+                "workflow_name": "泰国-数仓工作流（1H）",
+                "task_code": "task-main",
+                "task_name": "dwd_user_info",
+                "task_flag": "YES",
+                "project_code": "ad-proj",
+                "project_name": "泰国-投放平台",
+                "repair_mode": "complement_data",
+                "complement_start": "2026-09-11 00:00:00",
+                "complement_end": "2026-09-11 00:00:00",
+            }
+        ]
+        attempts = []
+
+        def fake_ds_api_post(endpoint, data):
+            attempts.append((endpoint, dict(data)))
+            return True, {"data": [888000]}, ""
+
+        with mock.patch.object(module, "ds_api_post", side_effect=fake_ds_api_post), \
+            mock.patch.object(module, "get_running_instances_by_workflow", return_value=[]), \
+            mock.patch.object(module, "log"), \
+            mock.patch("time.sleep"):
+            results, _ = module.step3_start_repair(tasks)
+
+        self.assertEqual(len(attempts), 1)
+        endpoint, payload = attempts[0]
+        self.assertEqual(payload["execType"], "START_PROCESS")
+        self.assertIn("startParams", payload)
+        self.assertEqual(json.loads(payload["startParams"])["dt"], "2026-09-10")
+        self.assertEqual(results[0]["status"], "success")
+
     def test_step3_start_repair_falls_back_to_dt_when_complement_range_missing(self):
         module = load_module()
+        module.AD_TABLE_PREFIXES = ("dwd_ad_",)
         tasks = [
             {
                 "table": "dwd_ad_fb_ad_insight_impression_age_gender",

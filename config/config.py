@@ -281,6 +281,16 @@ TESTDB_ALERT_CONFIG = {
 }
 
 
+# 各国“投放平台”项目标准名称（除中国外）。可用 DS_AD_PLATFORM_PROJECT_NAMES_JSON 覆盖。
+AD_PLATFORM_PROJECT_NAMES = {
+    "ine": "印尼-投放平台",
+    "mx": "墨西哥-投放平台",
+    "th": "泰国-投放平台",
+    "ph": "菲律宾-投放平台",
+    "pk": "巴基斯坦-投放平台",
+}
+
+
 REPAIR_CONFIG = {
     "scan_lookback_days": int(_get_env("SCAN_LOOKBACK_DAYS", "8")),
     "priority_workflow_codes": json.loads(_get_env("PRIORITY_WORKFLOW_CODES_JSON", "[]")),
@@ -296,12 +306,18 @@ REPAIR_CONFIG = {
             "[]",
         )
     ),
-    # 投放相关表（dwd_ad_/dwd_tt_/dwd_fb_/dwd_gg_ 等）走“投放平台”项目修复：
-    # 工作流在各国的投放平台项目（项目名包含投放平台关键字），且用补数方式修复。
+    # 投放相关表（dwd_ad_/dwd_tt_/dwd_fb_/dwd_gg_ 等）才走“投放平台”项目 + 补数修复；
+    # 其余表保持原有“主项目 + 传 dt”的修复方式不变。
     "ad_table_prefixes": json.loads(
         _get_env("AD_TABLE_PREFIXES_JSON", '["dwd_ad_", "dwd_tt_", "dwd_fb_", "dwd_gg_"]')
     ),
     "ad_platform_project_codes": json.loads(_get_env("DS_AD_PLATFORM_PROJECT_CODES_JSON", "[]")),
+    "ad_platform_project_names": json.loads(
+        _get_env(
+            "DS_AD_PLATFORM_PROJECT_NAMES_JSON",
+            json.dumps(AD_PLATFORM_PROJECT_NAMES, ensure_ascii=False),
+        )
+    ),
     "ad_platform_project_name_keyword": _get_env("DS_AD_PLATFORM_PROJECT_NAME_KEYWORD", "投放平台"),
     # 补数调度日期相对校验窗口 begin 的偏移天数：
     # 投放平台工作流按 D-1 调度（调度日期 D 跑 dt=D-1 分区）时保持默认 1；
