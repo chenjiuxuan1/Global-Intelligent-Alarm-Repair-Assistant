@@ -3600,6 +3600,434 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(data["processDefinition"]["name"], "WF Query")
 
+    def test_is_ad_platform_table_matches_configured_prefixes(self):
+        module = load_module()
+        module.AD_TABLE_PREFIXES = ("dwd_ad_", "dwd_tt_", "dwd_fb_", "dwd_gg_")
+
+        self.assertTrue(module.is_ad_platform_table("dwd_ad_fb_ad_insight_impression_age_gender"))
+        self.assertTrue(module.is_ad_platform_table("DWD_TT_ad_report_daily"))
+        self.assertTrue(module.is_ad_platform_table(" dwd_gg_ads_performance "))
+        self.assertFalse(module.is_ad_platform_table("dwd_user_info"))
+        self.assertFalse(module.is_ad_platform_table("dwb_a5_dialog"))
+        self.assertFalse(module.is_ad_platform_table(""))
+        module.AD_TABLE_PREFIXES = ()
+        self.assertFalse(module.is_ad_platform_table("dwd_ad_fb_ad_insight_impression_age_gender"))
+
+    def test_resolve_complement_schedule_range_single_day_window(self):
+        module = load_module()
+
+        start_text, end_text = module.resolve_complement_schedule_range(
+            datetime(2026, 9, 10, 0, 0, 0), datetime(2026, 9, 11, 0, 0, 0)
+        )
+
+        # D-1 口径：调度日期 2026-09-11 补 dt=2026-09-10 的分区
+        self.assertEqual(start_text, "2026-09-11 00:00:00")
+        self.assertEqual(end_text, "2026-09-11 00:00:00")
+
+    def test_resolve_complement_schedule_range_multi_day_window(self):
+        module = load_module()
+
+        start_text, end_text = module.resolve_complement_schedule_range(
+            datetime(2026, 9, 8, 3, 0, 0), datetime(2026, 9, 11, 0, 0, 0)
+        )
+
+        self.assertEqual(start_text, "2026-09-09 00:00:00")
+        self.assertEqual(end_text, "2026-09-11 00:00:00")
+
+    def test_resolve_complement_schedule_range_supports_same_day_offset(self):
+        module = load_module()
+
+        start_text, end_text = module.resolve_complement_schedule_range(
+            datetime(2026, 9, 10, 0, 0, 0), datetime(2026, 9, 11, 0, 0, 0), offset_days=0
+        )
+
+        self.assertEqual(start_text, "2026-09-10 00:00:00")
+        self.assertEqual(end_text, "2026-09-11 00:00:00")
+
+    def test_resolve_complement_schedule_range_caps_max_days(self):
+        module = load_module()
+
+        with mock.patch.object(module, "log"):
+            start_text, end_text = module.resolve_complement_schedule_range(
+                datetime(2026, 9, 1, 0, 0, 0), datetime(2026, 9, 10, 0, 0, 0), max_days=3
+            )
+
+        self.assertEqual(start_text, "2026-09-02 00:00:00")
+        self.assertEqual(end_text, "2026-09-04 00:00:00")
+
+    def test_resolve_complement_schedule_range_handles_missing_window(self):
+        module = load_module()
+
+        self.assertEqual(
+            module.resolve_complement_schedule_range(None, None), (None, None)
+        )
+        # 只有 end 时按 end-1 天兜底为 begin
+        start_text, end_text = module.resolve_complement_schedule_range(
+            None, datetime(2026, 9, 11, 0, 0, 0)
+        )
+        self.assertEqual(start_text, "2026-09-11 00:00:00")
+        self.assertEqual(end_text, "2026-09-11 00:00:00")
+        # 只有 begin 时按单日补数
+        start_text, end_text = module.resolve_complement_schedule_range(
+            datetime(2026, 9, 10, 0, 0, 0), None
+        )
+        self.assertEqual(start_text, "2026-09-11 00:00:00")
+        self.assertEqual(end_text, "2026-09-11 00:00:00")
+
+    def test_get_ad_platform_projects_discovers_by_name_keyword(self):
+        module = load_module()
+        module.AD_PLATFORM_PROJECT_CODES = []
+        module.AD_PLATFORM_PROJECT_NAME_KEYWORD = "投放平台"
+        module.reset_ad_platform_projects_cache()
+        ds_calls = []
+
+        def fake_ds_api_get(endpoint):
+            ds_calls.append(endpoint)
+            if endpoint.startswith("/projects?pageNo="):
+                return True, {
+                    "totalList": [
+                        {"code": 111, "name": "泰国数仓-工作流"},
+                        {"code": 222, "name": "泰国数仓-质量校验"},
+                        {"code": 333, "name": "泰国-投放平台"},
+                    ],
+                    "totalPage": 1,
+                }, ""
+            raise AssertionError(endpoint)
+
+        with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get), \
+            mock.patch.object(module, "log"):
+            projects = module.get_ad_platform_projects()
+            cached_projects = module.get_ad_platform_projects()
+
+        self.assertEqual(projects, [{"code": "333", "name": "泰国-投放平台"}])
+        self.assertEqual(cached_projects, projects)
+        self.assertEqual(len(ds_calls), 1)
+
+    def test_get_ad_platform_projects_prefers_configured_codes(self):
+        module = load_module()
+        module.AD_PLATFORM_PROJECT_CODES = [{"code": "888", "name": "MX-投放平台"}]
+        module.reset_ad_platform_projects_cache()
+
+        with mock.patch.object(module, "ds_api_get", side_effect=AssertionError("不应调用DS接口")), \
+            mock.patch.object(module, "log"):
+            projects = module.get_ad_platform_projects()
+
+        self.assertEqual(projects, [{"code": "888", "name": "MX-投放平台"}])
+
+    def test_step1_scan_alerts_attaches_complement_range_for_ad_tables(self):
+        module = load_module()
+        module.AD_TABLE_PREFIXES = ("dwd_ad_",)
+        rows = [
+            {
+                "id": 7,
+                "name": "fb insight",
+                "src_db": "dwd",
+                "src_tbl": "dwd_ad_fb_ad_insight_impression_age_gender",
+                "dest_db": "dwd",
+                "dest_tbl": "dwd_ad_fb_ad_insight_impression_age_gender",
+                "begin": datetime(2026, 9, 10, 0, 0, 0),
+                "end": datetime(2026, 9, 11, 0, 0, 0),
+                "diff": 22521,
+            }
+        ]
+
+        fake_cursor = mock.MagicMock()
+        fake_cursor.fetchall.return_value = rows
+        fake_conn = mock.MagicMock()
+        fake_conn.cursor.return_value.__enter__.return_value = fake_cursor
+        fake_db_module = types.ModuleType("alert.db_config")
+        fake_db_module.get_db_connection = mock.MagicMock(return_value=fake_conn)
+
+        with mock.patch.dict(sys.modules, {"alert.db_config": fake_db_module}), \
+            mock.patch.object(module, "log"):
+            alerts = module.step1_scan_alerts(now=datetime(2026, 9, 11, 11, 0, 0))
+
+        self.assertEqual(len(alerts), 1)
+        self.assertTrue(alerts[0]["is_ad_platform_table"])
+        self.assertEqual(alerts[0]["complement_start"], "2026-09-11 00:00:00")
+        self.assertEqual(alerts[0]["complement_end"], "2026-09-11 00:00:00")
+
+    def test_step2_find_locations_searches_ad_platform_project_first_for_ad_tables(self):
+        module = load_module()
+        module.PRIORITY_WORKFLOWS = []
+        module.AD_TABLE_PREFIXES = ("dwd_ad_",)
+        alerts = [
+            {
+                "id": 1,
+                "table": "dwd_ad_fb_ad_insight_impression_age_gender",
+                "dt": "2026-09-10",
+                "diff": 22521,
+                "complement_start": "2026-09-11 00:00:00",
+                "complement_end": "2026-09-11 00:00:00",
+            }
+        ]
+        searched = []
+
+        def fake_search(workflow_code, table_name, *args, **kwargs):
+            searched.append((kwargs.get("project_code") or module.PROJECT_CODE, workflow_code))
+            if workflow_code == "wf-ad":
+                return {
+                    "workflow_code": "wf-ad",
+                    "workflow_name": "泰国-投放平台-FB广告洞察",
+                    "task_code": "task-ad",
+                    "task_name": "dwd_ad_fb_ad_insight_impression_age_gender",
+                    "task_flag": "YES",
+                }
+            return None
+
+        def fake_workflow_list(project_code=None):
+            if project_code == "ad-proj":
+                return True, {"totalList": [{"code": "wf-ad"}]}, ""
+            return True, {"totalList": [{"code": "wf-main"}]}, ""
+
+        with mock.patch.object(module, "step2_search_in_workflow", side_effect=fake_search), \
+            mock.patch.object(module, "get_ad_platform_projects", return_value=[{"code": "ad-proj", "name": "泰国-投放平台"}]), \
+            mock.patch.object(module, "get_workflow_definition_list", side_effect=fake_workflow_list), \
+            mock.patch.object(module, "get_schedule_map", return_value={}), \
+            mock.patch.object(module, "log"):
+            tasks = module.step2_find_locations(alerts)
+
+        self.assertEqual(searched, [("ad-proj", "wf-ad")])
+        self.assertEqual(tasks[0]["project_code"], "ad-proj")
+        self.assertEqual(tasks[0]["project_name"], "泰国-投放平台")
+        self.assertEqual(tasks[0]["repair_mode"], "complement_data")
+        self.assertEqual(tasks[0]["complement_start"], "2026-09-11 00:00:00")
+        self.assertEqual(tasks[0]["complement_end"], "2026-09-11 00:00:00")
+
+    def test_step2_find_locations_falls_back_to_main_project_for_ad_tables(self):
+        module = load_module()
+        module.PRIORITY_WORKFLOWS = []
+        module.AD_TABLE_PREFIXES = ("dwd_ad_",)
+        alerts = [
+            {
+                "id": 1,
+                "table": "dwd_ad_fb_ad_insight_impression_age_gender",
+                "dt": "2026-09-10",
+                "diff": 22521,
+                "complement_start": "2026-09-11 00:00:00",
+                "complement_end": "2026-09-11 00:00:00",
+            }
+        ]
+        searched = []
+
+        def fake_search(workflow_code, table_name, *args, **kwargs):
+            searched.append((kwargs.get("project_code") or module.PROJECT_CODE, workflow_code))
+            if workflow_code == "wf-main":
+                return {
+                    "workflow_code": "wf-main",
+                    "workflow_name": "泰国-数仓工作流（1H）",
+                    "task_code": "task-main",
+                    "task_name": "dwd_ad_fb_ad_insight_impression_age_gender",
+                    "task_flag": "YES",
+                }
+            return None
+
+        def fake_workflow_list(project_code=None):
+            if project_code == "ad-proj":
+                # 投放平台项目里没有匹配的表，回退主项目
+                return True, {"totalList": [{"code": "wf-ad"}]}, ""
+            return True, {"totalList": [{"code": "wf-main"}]}, ""
+
+        with mock.patch.object(module, "step2_search_in_workflow", side_effect=fake_search), \
+            mock.patch.object(module, "get_ad_platform_projects", return_value=[{"code": "ad-proj", "name": "泰国-投放平台"}]), \
+            mock.patch.object(module, "get_workflow_definition_list", side_effect=fake_workflow_list), \
+            mock.patch.object(module, "get_schedule_map", return_value={}), \
+            mock.patch.object(module, "log"):
+            tasks = module.step2_find_locations(alerts)
+
+        self.assertEqual(
+            searched,
+            [("ad-proj", "wf-ad"), (module.PROJECT_CODE, "wf-main")],
+        )
+        self.assertEqual(tasks[0]["project_code"], module.PROJECT_CODE)
+        # 主项目命中保持传 dt 方式，不做补数
+        self.assertEqual(tasks[0]["repair_mode"], "dt_param")
+        self.assertIsNone(tasks[0]["complement_start"])
+
+    def test_step3_start_repair_uses_complement_mode_for_ad_platform_task(self):
+        module = load_module()
+        tasks = [
+            {
+                "table": "dwd_ad_fb_ad_insight_impression_age_gender",
+                "dt": "2026-09-10",
+                "workflow_code": "wf-ad",
+                "workflow_name": "泰国-投放平台-FB广告洞察",
+                "task_code": "task-ad",
+                "task_name": "dwd_ad_fb_ad_insight_impression_age_gender",
+                "task_flag": "YES",
+                "project_code": "ad-proj",
+                "project_name": "泰国-投放平台",
+                "repair_mode": "complement_data",
+                "complement_start": "2026-09-11 00:00:00",
+                "complement_end": "2026-09-11 00:00:00",
+            }
+        ]
+        attempts = []
+
+        def fake_ds_api_post(endpoint, data):
+            attempts.append((endpoint, dict(data)))
+            return True, {"data": [555000]}, ""
+
+        with mock.patch.object(module, "ds_api_post", side_effect=fake_ds_api_post), \
+            mock.patch.object(module, "get_running_instances_by_workflow", return_value=[]), \
+            mock.patch.object(module, "log"), \
+            mock.patch("time.sleep"):
+            results, running_instances = module.step3_start_repair(tasks)
+
+        self.assertEqual(len(attempts), 1)
+        endpoint, payload = attempts[0]
+        self.assertEqual(endpoint, "/projects/ad-proj/executors/start-process-instance")
+        self.assertEqual(payload["processDefinitionCode"], "wf-ad")
+        self.assertEqual(payload["execType"], "COMPLEMENT_DATA")
+        self.assertEqual(payload["complementStartDate"], "2026-09-11 00:00:00")
+        self.assertEqual(payload["complementEndDate"], "2026-09-11 00:00:00")
+        self.assertNotIn("startParams", payload)
+        self.assertEqual(payload["startNodeList"], "task-ad")
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(results[0]["instance_id"], 555000)
+        self.assertEqual(running_instances[0]["project_code"], "ad-proj")
+
+    def test_step3_start_repair_falls_back_to_dt_when_complement_range_missing(self):
+        module = load_module()
+        tasks = [
+            {
+                "table": "dwd_ad_fb_ad_insight_impression_age_gender",
+                "dt": "2026-09-10",
+                "workflow_code": "wf-ad",
+                "workflow_name": "泰国-投放平台-FB广告洞察",
+                "task_code": "task-ad",
+                "task_name": "dwd_ad_fb_ad_insight_impression_age_gender",
+                "task_flag": "YES",
+                "project_code": "ad-proj",
+                "project_name": "泰国-投放平台",
+                "repair_mode": "complement_data",
+                "complement_start": None,
+                "complement_end": None,
+            }
+        ]
+        attempts = []
+
+        def fake_ds_api_post(endpoint, data):
+            attempts.append((endpoint, dict(data)))
+            return True, {"data": [666000]}, ""
+
+        with mock.patch.object(module, "ds_api_post", side_effect=fake_ds_api_post), \
+            mock.patch.object(module, "get_running_instances_by_workflow", return_value=[]), \
+            mock.patch.object(module, "log"), \
+            mock.patch("time.sleep"):
+            results, _ = module.step3_start_repair(tasks)
+
+        self.assertEqual(len(attempts), 1)
+        endpoint, payload = attempts[0]
+        self.assertEqual(endpoint, "/projects/ad-proj/executors/start-process-instance")
+        self.assertEqual(payload["execType"], "START_PROCESS")
+        self.assertIn("startParams", payload)
+        self.assertEqual(json.loads(payload["startParams"])["dt"], "2026-09-10")
+        self.assertEqual(results[0]["status"], "success")
+
+    def test_step4_wait_and_check_uses_task_project_code_for_instance_queries(self):
+        module = load_module()
+        task = {
+            "table": "dwd_ad_fb_ad_insight_impression_age_gender",
+            "dt": "2026-09-10",
+            "workflow_code": "wf-ad",
+            "workflow_name": "泰国-投放平台-FB广告洞察",
+            "task_code": "task-ad",
+            "task_name": "dwd_ad_fb_ad_insight_impression_age_gender",
+            "project_code": "ad-proj",
+            "project_name": "泰国-投放平台",
+            "repair_mode": "complement_data",
+            "launched_at": "2026-09-11 11:00:00",
+        }
+        running_instances = [
+            {
+                "table": task["table"],
+                "instance_id": 424242,
+                "start_response_id": 424242,
+                "resolved_instance_id": None,
+                "workflow_code": "wf-ad",
+                "project_code": "ad-proj",
+                "task": task,
+            }
+        ]
+        detail_calls = []
+        replace_calls = []
+
+        def fake_detail(project_code, instance_id):
+            detail_calls.append((project_code, instance_id))
+            return True, {"state": "SUCCESS", "id": 424242, "endTime": "2026-09-11 11:30:00"}, ""
+
+        def fake_replace(project_code, item, data):
+            replace_calls.append(project_code)
+            return data
+
+        with mock.patch.object(module, "get_instance_detail", side_effect=fake_detail), \
+            mock.patch.object(module, "maybe_replace_with_recent_real_instance", side_effect=fake_replace), \
+            mock.patch.object(module, "log"):
+            completed_tasks, failed_tasks = module.step4_wait_and_check(running_instances)
+
+        self.assertEqual(detail_calls, [("ad-proj", 424242)])
+        self.assertEqual(replace_calls, ["ad-proj"])
+        self.assertEqual(len(completed_tasks), 1)
+        self.assertEqual(failed_tasks, [])
+        self.assertEqual(completed_tasks[0]["final_status"], "success")
+
+    def test_start_workflow_complement_retries_with_schedule_time_when_range_params_rejected(self):
+        module = load_module()
+        attempts = []
+
+        def fake_ds_api_post(endpoint, data):
+            attempts.append((endpoint, dict(data)))
+            if "complementStartDate" in data:
+                return False, {}, "complementStartDate 参数无效"
+            return True, {"data": [777000]}, ""
+
+        base_data = {"startNodeList": "task-ad", "taskDependType": "TASK_ONLY"}
+
+        with mock.patch.object(module, "ds_api_post", side_effect=fake_ds_api_post):
+            success, result, msg, endpoint, payload, launched_at = module.start_workflow_complement_with_fallbacks(
+                "ad-proj", "wf-ad", base_data, "2026-09-11 00:00:00", "2026-09-11 00:00:00", table="dwd_ad_x"
+            )
+
+        self.assertTrue(success)
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[1][1]["scheduleTime"], "2026-09-11 00:00:00")
+        self.assertEqual(attempts[1][1]["execType"], "COMPLEMENT_DATA")
+
+    def test_generate_tv_report_shows_complement_mode_for_rerun_tasks(self):
+        module = load_module()
+        summary = {
+            "initial_alert_count": 1,
+            "resolved_count": 0,
+            "remaining_count": 0,
+            "manual_review_count": 0,
+            "running_count": 0,
+            "display_pending_tables_count": 0,
+            "rerun_tasks": [
+                {
+                    "table": "dwd_ad_fb_ad_insight_impression_age_gender",
+                    "workflow_name": "泰国-投放平台-FB广告洞察",
+                    "project_code": "ad-proj",
+                    "project_name": "泰国-投放平台",
+                    "repair_mode": "complement_data",
+                    "complement_start": "2026-09-11 00:00:00",
+                    "complement_end": "2026-09-11 00:00:00",
+                    "instance_id": 555000,
+                    "end_time": "2026-09-11 11:30:00",
+                }
+            ],
+            "resolved_tasks": [],
+            "remaining_tasks": [],
+            "running_tasks": [],
+            "post_fuyan_remaining_tables": set(),
+        }
+
+        with mock.patch.object(module, "log"):
+            report = module.generate_tv_report(summary, [])
+
+        self.assertIn("泰国-投放平台-FB广告洞察（项目: 泰国-投放平台）", report)
+        self.assertIn("修复方式: 补数 2026-09-11 00:00:00 ~ 2026-09-11 00:00:00（不传dt）", report)
+
 
 if __name__ == "__main__":
     unittest.main()

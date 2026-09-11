@@ -57,6 +57,22 @@ BLOCKED_FUYAN_WORKFLOW_NAMES = {
     for name in (REPAIR_CONFIG.get('blocked_fuyan_workflow_names') or [])
     if str(name).strip()
 }
+# 投放相关表（dwd_ad_/dwd_tt_/dwd_fb_/dwd_gg_ 等前缀）走各国“投放平台”项目，
+# 修复方式为补数（COMPLEMENT_DATA）而非传 dt。
+AD_TABLE_PREFIXES = tuple(
+    str(prefix).strip().lower()
+    for prefix in (REPAIR_CONFIG.get('ad_table_prefixes') or [])
+    if str(prefix).strip()
+)
+AD_PLATFORM_PROJECT_NAME_KEYWORD = str(
+    REPAIR_CONFIG.get('ad_platform_project_name_keyword') or '投放平台'
+).strip()
+AD_PLATFORM_PROJECT_CODES = REPAIR_CONFIG.get('ad_platform_project_codes') or []
+AD_COMPLEMENT_SCHEDULE_OFFSET_DAYS = int(REPAIR_CONFIG.get('ad_complement_schedule_offset_days', 1))
+AD_COMPLEMENT_MAX_DAYS = int(REPAIR_CONFIG.get('ad_complement_max_days', 10))
+_AD_PLATFORM_PROJECTS_CACHE = None
+_PROJECT_WORKFLOW_LIST_CACHE = {}
+_PROJECT_SCHEDULE_MAP_CACHE = {}
 DS_STATUS_DEBUG = os.environ.get('REPAIR_DEBUG_DS_STATUS', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 REPAIR_WORKFLOW_CONFLICT_POLL_INTERVAL_SECONDS = int(os.environ.get('REPAIR_WORKFLOW_CONFLICT_POLL_INTERVAL_SECONDS', '30'))
 REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS = int(os.environ.get('REPAIR_WORKFLOW_CONFLICT_WAIT_SECONDS', '1800'))
@@ -336,6 +352,90 @@ def start_workflow_instance_with_fallbacks(project_code, workflow_code, base_dat
     return success, result, msg, used_endpoint, used_payload, launched_at
 
 
+def build_complement_start_payload_variants(complement_start, complement_end):
+    """兼容不同 DS 版本的补数启动参数。
+
+    DS 3.2+ 使用 complementStartDate/complementEndDate 指定补数调度时间范围；
+    旧版本只有 scheduleTime（单日补数），作为兜底重试。
+    """
+    return [
+        {
+            'execType': 'COMPLEMENT_DATA',
+            'complementStartDate': complement_start,
+            'complementEndDate': complement_end,
+        },
+        {
+            'execType': 'COMPLEMENT_DATA',
+            'scheduleTime': complement_start,
+        },
+    ]
+
+
+def should_retry_with_schedule_time_complement(message):
+    """老版本 DS 不识别 complementStart/EndDate 时，回退为 scheduleTime 单日补数。"""
+    text = str(message or '').lower()
+    return (
+        'complement' in text
+        or 'scheduletime' in text.replace(' ', '').replace('_', '')
+        or 'schedule time' in text
+        or '调度时间' in str(message or '')
+        or '补数' in str(message or '')
+    )
+
+
+def start_workflow_complement_with_fallbacks(
+    project_code, workflow_code, base_data, complement_start, complement_end, table=''
+):
+    """以补数（COMPLEMENT_DATA）方式启动投放平台工作流，不传 dt 启动参数。"""
+    start_attempts = _get_start_attempts()
+    payload_variants = build_complement_start_payload_variants(complement_start, complement_end)
+    success = False
+    result = {}
+    msg = ''
+    used_endpoint = ''
+    used_payload = {}
+    launched_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    for start_endpoint, code_field in start_attempts:
+        for index, variant in enumerate(payload_variants):
+            attempt_data = dict(base_data)
+            attempt_data.update(variant)
+            attempt_data[code_field] = workflow_code
+            if 'scheduleTime' not in variant:
+                attempt_data['scheduleTime'] = launched_at if start_endpoint == 'start-workflow-instance' else ''
+            used_endpoint = f"/projects/{project_code}/executors/{start_endpoint}"
+            used_payload = attempt_data
+            debug_log(
+                f"尝试补数启动 table={table or workflow_code} endpoint={used_endpoint} "
+                f"code_field={code_field} variant_index={index} "
+                f"range={complement_start} ~ {complement_end}"
+            )
+            success, result, msg = ds_api_post(used_endpoint, attempt_data)
+            if success:
+                extracted_instance_id = _extract_instance_id_from_start_result(result)
+                if extracted_instance_id not in (None, ''):
+                    return True, result, msg, used_endpoint, used_payload, launched_at
+                debug_log(
+                    f"补数启动接口返回成功但无实例ID table={table or workflow_code} "
+                    f"endpoint={used_endpoint} raw_data={result.get('data')!r}"
+                )
+                success = False
+                result = {}
+                msg = '补数启动接口返回成功但未提供实例ID'
+            else:
+                debug_log(
+                    f"补数启动失败 table={table or workflow_code} endpoint={used_endpoint} "
+                    f"msg={msg or result.get('msg', '')}"
+                )
+                if index == 0 and should_retry_with_schedule_time_complement(msg):
+                    continue
+                if should_retry_with_alternate_start_endpoint(msg):
+                    break
+            break
+
+    return success, result, msg, used_endpoint, used_payload, launched_at
+
+
 def _get_instance_state_types_for_search(include_all=False):
     """根据接口风格选择可查询的状态枚举，避开已知不兼容口径。"""
     if DS_INSTANCE_ENDPOINT_STYLE == 'process-instances' or DS_API_MODE == 'process_v2':
@@ -390,8 +490,13 @@ def get_workflow_name_from_detail(detail):
     return ''
 
 
-def get_workflow_definition_list():
+def get_workflow_definition_list(project_code=None):
     """兼容 DS 3.3 workflow-definition 与 DS 3.2 process-definition 列表接口，并自动翻页"""
+    project_code = str(project_code or PROJECT_CODE)
+    cached = _PROJECT_WORKFLOW_LIST_CACHE.get(project_code)
+    if cached is not None:
+        return cached
+
     endpoint_templates = _get_definition_list_endpoint_templates()
     last_msg = ""
     started_at = time.time()
@@ -399,23 +504,27 @@ def get_workflow_definition_list():
     def budget_exceeded():
         return DS_WORKFLOW_LIST_MAX_SECONDS > 0 and (time.time() - started_at) >= DS_WORKFLOW_LIST_MAX_SECONDS
 
+    result = None
     for endpoint_template in endpoint_templates:
         if budget_exceeded():
-            return False, {}, f"获取工作流列表超过{DS_WORKFLOW_LIST_MAX_SECONDS}秒预算: {last_msg or 'timeout budget exceeded'}"
+            result = (False, {}, f"获取工作流列表超过{DS_WORKFLOW_LIST_MAX_SECONDS}秒预算: {last_msg or 'timeout budget exceeded'}")
+            break
 
         if "{page_no}" not in endpoint_template:
-            endpoint = endpoint_template.format(project_code=PROJECT_CODE)
+            endpoint = endpoint_template.format(project_code=project_code)
             success, data, msg = ds_api_get(endpoint)
             if not success:
                 last_msg = msg
                 continue
 
             if isinstance(data, list) and data:
-                return True, {'totalList': data}, ''
+                result = (True, {'totalList': data}, '')
+                break
             if isinstance(data, dict):
                 total_list = data.get('totalList', [])
                 if total_list:
-                    return True, {'totalList': total_list}, ''
+                    result = (True, {'totalList': total_list}, '')
+                    break
             continue
 
         page_no = 1
@@ -424,8 +533,9 @@ def get_workflow_definition_list():
 
         while page_no <= total_pages:
             if budget_exceeded():
-                return False, {}, f"获取工作流列表超过{DS_WORKFLOW_LIST_MAX_SECONDS}秒预算: {last_msg or 'timeout budget exceeded'}"
-            endpoint = endpoint_template.format(project_code=PROJECT_CODE, page_no=page_no)
+                merged_total_list = []
+                break
+            endpoint = endpoint_template.format(project_code=project_code, page_no=page_no)
             success, data, msg = ds_api_get(endpoint)
             if not success:
                 last_msg = msg
@@ -441,13 +551,25 @@ def get_workflow_definition_list():
             page_no += 1
 
         if merged_total_list:
-            return True, {'totalList': merged_total_list}, ''
+            result = (True, {'totalList': merged_total_list}, '')
+            break
 
-    return False, {}, last_msg
+    if result is None:
+        result = (False, {}, last_msg)
+
+    if result[0]:
+        # 只缓存成功结果，失败允许下次重试，避免一次抖动导致整个运行周期找不到工作流。
+        _PROJECT_WORKFLOW_LIST_CACHE[project_code] = result
+    return result
 
 
-def get_schedule_map():
-    """获取当前项目的调度配置映射，用于识别带定时的父工作流"""
+def get_schedule_map(project_code=None):
+    """获取指定项目的调度配置映射，用于识别带定时的父工作流"""
+    project_code = str(project_code or PROJECT_CODE)
+    cached = _PROJECT_SCHEDULE_MAP_CACHE.get(project_code)
+    if cached is not None:
+        return cached
+
     endpoint_templates = [
         "/projects/{project_code}/schedules?pageNo={page_no}&pageSize=200",
     ]
@@ -458,7 +580,7 @@ def get_schedule_map():
         total_pages = 1
 
         while page_no <= total_pages:
-            endpoint = endpoint_template.format(project_code=PROJECT_CODE, page_no=page_no)
+            endpoint = endpoint_template.format(project_code=project_code, page_no=page_no)
             success, data, msg = ds_api_get(endpoint)
             if not success:
                 break
@@ -477,7 +599,110 @@ def get_schedule_map():
             total_pages = data.get('totalPage') or 1
             page_no += 1
 
+    _PROJECT_SCHEDULE_MAP_CACHE[project_code] = schedule_map
     return schedule_map
+
+
+def is_ad_platform_table(table_name):
+    """判断是否为投放相关表（dwd_ad_/dwd_tt_/dwd_fb_/dwd_gg_ 等前缀）。"""
+    text = str(table_name or '').strip().lower()
+    if not text or not AD_TABLE_PREFIXES:
+        return False
+    return text.startswith(AD_TABLE_PREFIXES)
+
+
+def reset_ad_platform_projects_cache():
+    """清空投放平台项目缓存（测试与配置热更新用）。"""
+    global _AD_PLATFORM_PROJECTS_CACHE
+    _AD_PLATFORM_PROJECTS_CACHE = None
+
+
+def list_all_projects():
+    """列出当前 token 可访问的所有 DS 项目（兼容分页列表与授权列表两种接口）。"""
+    projects = []
+    seen_codes = set()
+
+    def collect(items):
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            code = item.get('code')
+            if code in (None, ''):
+                continue
+            key = str(code)
+            if key in seen_codes:
+                continue
+            seen_codes.add(key)
+            projects.append({'code': key, 'name': str(item.get('name') or '')})
+
+    page_no = 1
+    total_pages = 1
+    while page_no <= total_pages:
+        success, data, msg = ds_api_get(
+            f"/projects?pageNo={page_no}&pageSize={DS_WORKFLOW_LIST_PAGE_SIZE}"
+        )
+        if not success:
+            break
+        if isinstance(data, list):
+            collect(data)
+            break
+        if isinstance(data, dict):
+            collect(data.get('totalList') or [])
+            total_pages = data.get('totalPage') or 1
+        page_no += 1
+
+    if projects:
+        return projects
+
+    # 兼容旧版本：/projects/list 返回授权项目列表（无分页）
+    success, data, msg = ds_api_get("/projects/list")
+    if success:
+        if isinstance(data, list):
+            collect(data)
+        elif isinstance(data, dict):
+            collect(data.get('totalList') or data.get('data') or [])
+    return projects
+
+
+def get_ad_platform_projects():
+    """解析各国“投放平台”项目：优先显式配置的项目 code，否则按项目名关键字自动发现。"""
+    global _AD_PLATFORM_PROJECTS_CACHE
+    if _AD_PLATFORM_PROJECTS_CACHE is not None:
+        return _AD_PLATFORM_PROJECTS_CACHE
+
+    configured = []
+    for entry in AD_PLATFORM_PROJECT_CODES:
+        if isinstance(entry, dict):
+            code = str(entry.get('code') or '').strip()
+            if code:
+                configured.append({'code': code, 'name': str(entry.get('name') or '')})
+        else:
+            code = str(entry).strip()
+            if code:
+                configured.append({'code': code, 'name': ''})
+
+    if configured:
+        log(f"📌 投放平台项目(使用显式配置): {[(p['name'] or p['code'], p['code']) for p in configured]}")
+        _AD_PLATFORM_PROJECTS_CACHE = configured
+        return configured
+
+    matched = []
+    projects = list_all_projects()
+    for project in projects:
+        if AD_PLATFORM_PROJECT_NAME_KEYWORD and AD_PLATFORM_PROJECT_NAME_KEYWORD in project['name']:
+            matched.append(project)
+
+    _AD_PLATFORM_PROJECTS_CACHE = matched
+    if matched:
+        log(f"📌 自动发现投放平台项目: {[(p['name'], p['code']) for p in matched]}")
+    else:
+        log(
+            f"⚠️ 未在可访问项目列表中发现名称含“{AD_PLATFORM_PROJECT_NAME_KEYWORD}”的投放平台项目，"
+            f"投放相关表将回退按原逻辑搜索主项目"
+        )
+    return matched
 
 
 def get_instance_detail(project_code, instance_id):
@@ -1208,6 +1433,48 @@ def resolve_alert_dt(row, now=None):
     return now.strftime('%Y-%m-%d')
 
 
+def resolve_complement_schedule_range(begin, end, offset_days=None, max_days=None):
+    """根据质量校验时间窗计算投放表补数的调度时间范围。
+
+    校验窗口 [begin, end] 覆盖的 dt 分区为 [begin_date, end_date-1]（与
+    resolve_alert_dt / get_alert_window_status 的口径一致）。投放平台工作流按天
+    调度，默认 D-1 口径（调度日期 D 补 dt=D-1 分区），因此补数调度范围取
+    [begin_date+offset, max(end_date, begin_date+offset)]；当天调度的工作流把
+    AD_COMPLEMENT_SCHEDULE_OFFSET_DAYS 配为 0 即可。
+
+    返回 (start_text, end_text)，格式 'YYYY-MM-DD HH:MM:SS'；无法解析窗口时返回 (None, None)。
+    """
+    if offset_days is None:
+        offset_days = AD_COMPLEMENT_SCHEDULE_OFFSET_DAYS
+    if max_days is None:
+        max_days = AD_COMPLEMENT_MAX_DAYS
+
+    begin_time = normalize_to_datetime(begin)
+    end_time = normalize_to_datetime(end)
+    if begin_time is None and end_time is None:
+        return None, None
+
+    if begin_time is None:
+        begin_time = end_time - timedelta(days=1)
+    if end_time is None:
+        end_time = begin_time
+
+    start_date = begin_time.date() + timedelta(days=max(offset_days, 0))
+    end_date = max(end_time.date(), start_date)
+
+    if max_days > 0 and (end_date - start_date).days + 1 > max_days:
+        log(
+            f"⚠️ 投放表补数范围 {start_date} ~ {end_date} 超过上限 {max_days} 天，"
+            f"截断为 {start_date} ~ {start_date + timedelta(days=max_days - 1)}"
+        )
+        end_date = start_date + timedelta(days=max_days - 1)
+
+    return (
+        start_date.strftime('%Y-%m-%d %H:%M:%S'),
+        end_date.strftime('%Y-%m-%d %H:%M:%S'),
+    )
+
+
 def get_alert_window_status(row, now=None, lookback_days=None):
     """根据告警窗口跨度判断是否超出自动修复范围。"""
     if now is None:
@@ -1367,6 +1634,9 @@ def step1_scan_alerts(now=None):
                 
                 dt = resolve_alert_dt(row, now=now)
                 window_status = get_alert_window_status(row, now=now)
+                complement_start, complement_end = resolve_complement_schedule_range(
+                    row.get('begin'), row.get('end')
+                )
                 alert = {
                     'id': row['id'],
                     'table': table_name,
@@ -1375,7 +1645,10 @@ def step1_scan_alerts(now=None):
                     'search_tables': build_search_tables(row),
                     'dt': dt,
                     'name': row.get('name', ''),
-                    'diff': row.get('diff', '')
+                    'diff': row.get('diff', ''),
+                    'is_ad_platform_table': is_ad_platform_table(table_name),
+                    'complement_start': complement_start,
+                    'complement_end': complement_end,
                 }
                 if window_status['is_out_of_window']:
                     begin_text = window_status.get('begin_date') or '未知'
@@ -1537,15 +1810,16 @@ def _select_runnable_candidate(candidates):
     return (non_datax_candidates or runnable_candidates)[0]
 
 
-def step2_search_in_workflow(workflow_code, table_name, visited=None, is_subworkflow=False):
+def step2_search_in_workflow(workflow_code, table_name, visited=None, is_subworkflow=False, project_code=None):
     """在包含目标表的叶子子工作流中查找可重跑节点。"""
     workflow_code = str(workflow_code)
+    project_code = str(project_code or PROJECT_CODE)
     visited = set(visited or set())
     if workflow_code in visited:
         return None
     visited.add(workflow_code)
 
-    success, detail, msg = get_workflow_definition_detail(workflow_code)
+    success, detail, msg = get_workflow_definition_detail(workflow_code, project_code)
     if not success:
         return None
     
@@ -1582,6 +1856,7 @@ def step2_search_in_workflow(workflow_code, table_name, visited=None, is_subwork
                 table_name,
                 visited=visited,
                 is_subworkflow=True,
+                project_code=project_code,
             )
             if child_result:
                 child_candidates.append(child_result)
@@ -1656,21 +1931,94 @@ def step2_find_locations(alerts):
                 'task_code': '',
                 'task_name': '',
                 'task_flag': '',
+                'project_code': PROJECT_CODE,
+                'repair_mode': '',
+                'complement_start': None,
+                'complement_end': None,
                 'status': 'skipped_out_of_window',
                 'error': alert.get('error', ''),
             }
             log(f"  ⏭️ {task['error']}")
             tasks.append(task)
             continue
-        
+
         location = None
         scheduled_location = None
         blocked_location = None
         forbidden_location = None
+        location_project = None
+
+        def evaluate_result(result, result_schedule_map):
+            """按 禁用>黑名单>带定时父工作流 的顺序过滤命中，返回是否可直接使用。"""
+            nonlocal location, scheduled_location, blocked_location, forbidden_location
+            if str(result.get('task_flag', 'YES')).upper() == 'NO':
+                if forbidden_location is None:
+                    forbidden_location = result
+                return False
+            if is_blocked_workflow_match(result):
+                if blocked_location is None:
+                    blocked_location = result
+                return False
+            if (
+                is_workflow_scheduled(result['workflow_code'], result_schedule_map)
+                and should_block_scheduled_workflow_match(result)
+            ):
+                if scheduled_location is None:
+                    scheduled_location = result
+                return False
+            location = result
+            return True
+
+        # 投放相关表（dwd_ad_/dwd_tt_/dwd_fb_/dwd_gg_ 等）的工作流在各国的
+        # “投放平台”项目里，优先到投放平台项目中搜索，找不到再回退主项目。
+        ad_scope_projects = []
+        if is_ad_platform_table(table):
+            for ad_project in get_ad_platform_projects():
+                ad_project_code = ad_project['code']
+                ad_project_name = ad_project['name'] or ad_project_code
+                success, data, msg = get_workflow_definition_list(project_code=ad_project_code)
+                if success:
+                    ad_workflows = data.get('totalList', [])
+                    log(
+                        f"  📌 投放相关表，先在投放平台项目 {ad_project_name}({ad_project_code}) 中搜索"
+                        f" ({len(ad_workflows)} 个工作流)"
+                    )
+                    ad_scope_projects.append((ad_project_code, ad_project_name, ad_workflows))
+                else:
+                    log(
+                        f"  ⚠️ 获取投放平台项目 {ad_project_name}({ad_project_code}) 工作流列表失败: "
+                        f"{msg or '未知错误'}，回退主项目搜索"
+                    )
+
+        for ad_project_code, ad_project_name, ad_workflows in ad_scope_projects:
+            if location:
+                break
+            ad_schedule_map = get_schedule_map(ad_project_code)
+            for wf in ad_workflows:
+                wf_code = (
+                    wf.get('code')
+                    or wf.get('workflowDefinitionCode')
+                    or wf.get('processDefinitionCode')
+                    or wf.get('definitionCode')
+                )
+                for search_table in search_tables:
+                    result = step2_search_in_workflow(wf_code, search_table, project_code=ad_project_code)
+                    if not result:
+                        continue
+                    result = dict(result)
+                    result['project_code'] = ad_project_code
+                    if evaluate_result(result, ad_schedule_map):
+                        location_project = (ad_project_code, ad_project_name)
+                        break
+                if location:
+                    break
+
         # 先在优先工作流中搜索
         priority_started_at = time.time()
         priority_budget_exceeded = False
         for wf_code, wf_name in priority_workflows:
+            if location:
+                break
             if (
                 DS_PRIORITY_WORKFLOW_MAX_SECONDS > 0
                 and (time.time() - priority_started_at) >= DS_PRIORITY_WORKFLOW_MAX_SECONDS
@@ -1682,24 +2030,11 @@ def step2_find_locations(alerts):
                 result = step2_search_in_workflow(wf_code, search_table)
                 if not result:
                     continue
-                if str(result.get('task_flag', 'YES')).upper() == 'NO':
-                    if forbidden_location is None:
-                        forbidden_location = result
-                    continue
-                if is_blocked_workflow_match(result):
-                    if blocked_location is None:
-                        blocked_location = result
-                    continue
                 if schedule_map is None:
                     schedule_map = get_schedule_map()
-                if (
-                    is_workflow_scheduled(result['workflow_code'], schedule_map)
-                    and should_block_scheduled_workflow_match(result)
-                ):
-                    scheduled_location = result
-                    continue
-                location = result
-                break
+                if evaluate_result(result, schedule_map):
+                    location_project = (PROJECT_CODE, '')
+                    break
             if location:
                 break
         
@@ -1721,6 +2056,8 @@ def step2_find_locations(alerts):
             
             # 在缓存的工作流中搜索
             for wf in all_workflows:
+                if location:
+                    break
                 wf_code = (
                     wf.get('code')
                     or wf.get('workflowDefinitionCode')
@@ -1733,29 +2070,31 @@ def step2_find_locations(alerts):
                         result = step2_search_in_workflow(wf_code, search_table)
                         if not result:
                             continue
-                        if str(result.get('task_flag', 'YES')).upper() == 'NO':
-                            if forbidden_location is None:
-                                forbidden_location = result
-                            continue
-                        if is_blocked_workflow_match(result):
-                            if blocked_location is None:
-                                blocked_location = result
-                            continue
                         if schedule_map is None:
                             schedule_map = get_schedule_map()
-                        if (
-                            is_workflow_scheduled(result['workflow_code'], schedule_map)
-                            and should_block_scheduled_workflow_match(result)
-                        ):
-                            if scheduled_location is None:
-                                scheduled_location = result
-                            continue
-                        location = result
-                        break
+                        if evaluate_result(result, schedule_map):
+                            location_project = (PROJECT_CODE, '')
+                            break
                     if location:
                         break
         
         if location:
+            task_project_code, task_project_name = location_project or (PROJECT_CODE, '')
+            # 只有命中投放平台项目时才走补数模式；主项目命中保持原有传 dt 方式。
+            if task_project_code != str(PROJECT_CODE):
+                repair_mode = 'complement_data'
+                complement_start = alert.get('complement_start')
+                complement_end = alert.get('complement_end')
+                if not complement_start or not complement_end:
+                    log("  ⚠️ 告警缺少校验时间窗，无法补数，回退为传 dt 启动")
+                    repair_mode = 'dt_param'
+                    complement_start = None
+                    complement_end = None
+            else:
+                repair_mode = 'dt_param'
+                complement_start = None
+                complement_end = None
+
             task = {
                 'alert_id': alert['id'],
                 'table': table,
@@ -1769,8 +2108,17 @@ def step2_find_locations(alerts):
                 'task_code': location['task_code'],
                 'task_name': location['task_name'],
                 'task_flag': location.get('task_flag', 'YES'),
+                'project_code': task_project_code,
+                'project_name': task_project_name or '主项目',
+                'repair_mode': repair_mode,
+                'complement_start': complement_start,
+                'complement_end': complement_end,
             }
             log(f"  ✅ {location['workflow_name']} -> {location['task_name']}")
+            if repair_mode == 'complement_data':
+                log(
+                    f"  🧮 投放表补数模式: 补数调度时间 {complement_start} ~ {complement_end}（不传 dt）"
+                )
             found_count += 1
         elif scheduled_location:
             error_msg = build_scheduled_parent_only_error(scheduled_location)
@@ -1787,6 +2135,11 @@ def step2_find_locations(alerts):
                 'task_code': '',
                 'task_name': scheduled_location.get('task_name', ''),
                 'task_flag': scheduled_location.get('task_flag', ''),
+                'project_code': PROJECT_CODE,
+                'project_name': '主项目',
+                'repair_mode': '',
+                'complement_start': None,
+                'complement_end': None,
                 'error': error_msg,
             }
             log(f"  ⏭️ {error_msg}")
@@ -1805,6 +2158,11 @@ def step2_find_locations(alerts):
                 'task_code': '',
                 'task_name': blocked_location.get('task_name', ''),
                 'task_flag': blocked_location.get('task_flag', ''),
+                'project_code': PROJECT_CODE,
+                'project_name': '主项目',
+                'repair_mode': '',
+                'complement_start': None,
+                'complement_end': None,
                 'error': error_msg,
             }
             log(f"  ⏭️ {error_msg}")
@@ -1823,6 +2181,11 @@ def step2_find_locations(alerts):
                 'task_code': '',
                 'task_name': forbidden_location.get('task_name', ''),
                 'task_flag': forbidden_location.get('task_flag', ''),
+                'project_code': PROJECT_CODE,
+                'project_name': '主项目',
+                'repair_mode': '',
+                'complement_start': None,
+                'complement_end': None,
                 'error': error_msg,
             }
             log(f"  ⏭️ {error_msg}")
@@ -1845,6 +2208,11 @@ def step2_find_locations(alerts):
                 'task_code': '',
                 'task_name': '',
                 'task_flag': '',
+                'project_code': PROJECT_CODE,
+                'project_name': '主项目',
+                'repair_mode': '',
+                'complement_start': None,
+                'complement_end': None,
                 'error': error_msg,
             }
             log(f"  ❌ {error_msg}")
@@ -2149,11 +2517,15 @@ def step3_start_repair(tasks):
         log(f"\n[{i}/{len(tasks)}] {table}")
         log(f"  工作流: {task['workflow_name']}")
         log(f"  任务: {task['task_name']}")
+        # 投放平台项目中的工作流使用其所属项目启动与监控
+        project_code = str(task.get('project_code') or PROJECT_CODE)
+        if project_code != str(PROJECT_CODE):
+            log(f"  项目: {task.get('project_name') or project_code} ({project_code})")
 
         # 工作流实例区域有任务在跑时不执行修复：每5分钟轮询检查，空闲后再启动
-        busy_instances = get_running_instances_by_workflow(PROJECT_CODE, workflow_code)
+        busy_instances = get_running_instances_by_workflow(project_code, workflow_code)
         if busy_instances:
-            wait_success, remaining_busy = wait_until_workflow_idle(PROJECT_CODE, workflow_code)
+            wait_success, remaining_busy = wait_until_workflow_idle(project_code, workflow_code)
             if not wait_success:
                 error_msg = build_workflow_idle_wait_timeout_error(remaining_busy or busy_instances)
                 log(f"  ⏭️ 等待工作流实例区域空闲超时，跳过启动: {error_msg}")
@@ -2174,13 +2546,28 @@ def step3_start_repair(tasks):
             'tenantCode': DS_TENANT_CODE,
             'dryRun': 0,
         }
-        success, result, msg, used_endpoint, used_payload, launched_at = start_workflow_instance_with_fallbacks(
-            PROJECT_CODE,
-            workflow_code,
-            base_data,
-            dt=dt,
-            table=table,
-        )
+        complement_start = task.get('complement_start')
+        complement_end = task.get('complement_end')
+        if task.get('repair_mode') == 'complement_data' and complement_start and complement_end:
+            log(f"  🧮 补数模式: 调度时间范围 {complement_start} ~ {complement_end}（不传 dt）")
+            success, result, msg, used_endpoint, used_payload, launched_at = start_workflow_complement_with_fallbacks(
+                project_code,
+                workflow_code,
+                base_data,
+                complement_start,
+                complement_end,
+                table=table,
+            )
+        else:
+            if task.get('repair_mode') == 'complement_data':
+                log("  ⚠️ 补数时间范围缺失，回退为传 dt 启动")
+            success, result, msg, used_endpoint, used_payload, launched_at = start_workflow_instance_with_fallbacks(
+                project_code,
+                workflow_code,
+                base_data,
+                dt=dt,
+                table=table,
+            )
 
         if success:
             instance_id = _extract_instance_id_from_start_result(result)
@@ -2199,6 +2586,7 @@ def step3_start_repair(tasks):
                 'start_response_id': instance_id,
                 'resolved_instance_id': None,
                 'workflow_code': workflow_code,
+                'project_code': project_code,
                 'task': task
             })
         else:
@@ -2253,6 +2641,9 @@ def step4_wait_and_check(running_instances, poll_interval=30, max_wait=1800):
             table = item['table']
             instance_id = item.get('resolved_instance_id') or item['instance_id']
             workflow_code = item.get('workflow_code') or item['task'].get('workflow_code')
+            item_project_code = str(
+                item.get('project_code') or item['task'].get('project_code') or PROJECT_CODE
+            )
 
             # 先使用启动接口返回的实例 ID 查询详情。部分 process-instances 风格集群会返回
             # 启动回执而非真实实例 ID，但只有直接查询失败时才扫描实例列表；否则每个轮询
@@ -2260,9 +2651,9 @@ def step4_wait_and_check(running_instances, poll_interval=30, max_wait=1800):
             discovered_instance = {}
 
             # 查询实例状态
-            success, data, msg = get_instance_detail(PROJECT_CODE, instance_id)
+            success, data, msg = get_instance_detail(item_project_code, instance_id)
             if not success or not data:
-                fallback_data = get_instance_from_list(PROJECT_CODE, instance_id)
+                fallback_data = get_instance_from_list(item_project_code, instance_id)
                 if fallback_data:
                     success = True
                     data = fallback_data
@@ -2273,7 +2664,7 @@ def step4_wait_and_check(running_instances, poll_interval=30, max_wait=1800):
                     msg = ''
                 elif workflow_code:
                     recent_instance = find_recent_instance_by_workflow(
-                        PROJECT_CODE,
+                        item_project_code,
                         workflow_code,
                         launched_at=item['task'].get('launched_at'),
                     )
@@ -2287,7 +2678,7 @@ def step4_wait_and_check(running_instances, poll_interval=30, max_wait=1800):
                         msg = ''
             
             if success and data:
-                data = maybe_replace_with_recent_real_instance(PROJECT_CODE, item, data)
+                data = maybe_replace_with_recent_real_instance(item_project_code, item, data)
                 state = data.get('state', 'UNKNOWN')
                 item['last_observed_state'] = state
                 if data.get('id') is not None:
@@ -2322,7 +2713,7 @@ def step4_wait_and_check(running_instances, poll_interval=30, max_wait=1800):
                 # 超过 60s 还无法拿到明确状态则直接判失败，避免流程长期卡住。
                 if instance_age >= max_wait:
                     diagnostics = collect_instance_query_diagnostics(
-                        PROJECT_CODE,
+                        item_project_code,
                         instance_id=item['instance_id'],
                         workflow_code=workflow_code,
                         launched_at=item['task'].get('launched_at'),
@@ -2851,6 +3242,15 @@ def generate_tv_report(summary, fuyan_results):
         report_lines.append("🔁 【本次已重跑任务】")
         for task in summary['rerun_tasks']:
             report_lines.append(f"  • {task['table']}")
+            if task.get('workflow_name'):
+                project_label = ''
+                if task.get('project_code') and task.get('project_code') != PROJECT_CODE:
+                    project_label = f"（项目: {task.get('project_name') or task.get('project_code')}）"
+                report_lines.append(f"    工作流: {task['workflow_name']}{project_label}")
+            if task.get('repair_mode') == 'complement_data' and task.get('complement_start'):
+                report_lines.append(
+                    f"    修复方式: 补数 {task['complement_start']} ~ {task['complement_end']}（不传dt）"
+                )
             if task.get('instance_id'):
                 report_lines.append(f"    实例ID: {task['instance_id']}")
             if task.get('end_time'):
