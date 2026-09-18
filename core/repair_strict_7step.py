@@ -375,13 +375,33 @@ def start_workflow_instance_with_fallbacks(project_code, workflow_code, base_dat
     return success, result, msg, used_endpoint, used_payload, launched_at
 
 
+def _enumerate_daily_schedule_dates(complement_start, complement_end):
+    """按天枚举 [complement_start, complement_end] 的调度日期（含两端），供 DS 3.4 手工补数列表使用。"""
+    try:
+        start_day = datetime.strptime(str(complement_start)[:10], '%Y-%m-%d')
+        end_day = datetime.strptime(str(complement_end)[:10], '%Y-%m-%d')
+    except (ValueError, TypeError):
+        return []
+    if end_day < start_day:
+        start_day, end_day = end_day, start_day
+    dates = []
+    current = start_day
+    while current <= end_day and len(dates) <= max(int(AD_COMPLEMENT_MAX_DAYS or 0), 1):
+        dates.append(current.strftime('%Y-%m-%d 00:00:00'))
+        current += timedelta(days=1)
+    return dates
+
+
 def build_complement_start_payload_variants(complement_start, complement_end):
     """兼容不同 DS 版本的补数启动参数。
 
-    DS 3.2+ 使用 complementStartDate/complementEndDate 指定补数调度时间范围；
-    旧版本只有 scheduleTime（单日补数），作为兜底重试。
+    - 变体0: DS 3.2/3.3 旧接口 start-process-instance，顶层 complementStartDate/complementEndDate；
+    - 变体1: 更老版本只有 scheduleTime（单日补数）；
+    - 变体2: DS 3.4 新接口 start-workflow-instance，scheduleTime 为 JSON 字符串
+      {"complementScheduleDateList":"2026-01-01 00:00:00,2026-01-02 00:00:00"}（手工指定调度日期列表，
+      无需工作流配置定时；范围字段在 3.4 中不生效，scheduleTime 是必填参数且按 backfillTime 解析）。
     """
-    return [
+    variants = [
         {
             'execType': 'COMPLEMENT_DATA',
             'complementStartDate': complement_start,
@@ -392,6 +412,16 @@ def build_complement_start_payload_variants(complement_start, complement_end):
             'scheduleTime': complement_start,
         },
     ]
+    ds34_dates = _enumerate_daily_schedule_dates(complement_start, complement_end)
+    if ds34_dates:
+        variants.append({
+            'execType': 'COMPLEMENT_DATA',
+            'scheduleTime': json.dumps(
+                {'complementScheduleDateList': ','.join(ds34_dates)},
+                separators=(',', ':'),
+            ),
+        })
+    return variants
 
 
 def should_retry_with_schedule_time_complement(message):
@@ -448,13 +478,11 @@ def start_workflow_complement_with_fallbacks(
             else:
                 debug_log(
                     f"补数启动失败 table={table or workflow_code} endpoint={used_endpoint} "
-                    f"msg={msg or result.get('msg', '')}"
+                    f"variant={index} msg={msg or result.get('msg', '')}"
                 )
-                if index == 0 and should_retry_with_schedule_time_complement(msg):
-                    continue
-                if should_retry_with_alternate_start_endpoint(msg):
-                    break
-            break
+            # 各版本 DS 的报错形态差异很大（405/缺参数/backfillTime解析失败等），
+            # 统一遍历全部 端点×参数变体，直到某个组合成功为止；失败的启动不会产生实例，无副作用。
+            continue
 
     return success, result, msg, used_endpoint, used_payload, launched_at
 
@@ -2716,6 +2744,19 @@ def step3_start_repair(tasks):
                 complement_end,
                 table=table,
             )
+            if not success:
+                # 兜底：个别国家 DS（如巴基斯坦 3.4）对未配置定时的工作流无法补数启动，
+                # 回退为在投放平台项目内传 dt 启动，保证修复链路不中断；报告中会注明实际修复方式。
+                fallback_error = result.get('msg', msg or '未知错误')
+                log(f"  ⚠️ 补数启动失败({fallback_error})，自动回退为传 dt 启动（仍在投放平台项目内）")
+                task['repair_mode'] = 'complement_fallback_dt'
+                success, result, msg, used_endpoint, used_payload, launched_at = start_workflow_instance_with_fallbacks(
+                    project_code,
+                    workflow_code,
+                    base_data,
+                    dt=dt,
+                    table=table,
+                )
         else:
             if task.get('repair_mode') == 'complement_data' and not use_complement:
                 log("  ⚠️ 不满足补数条件（非投放表/主项目命中/补数范围缺失），回退为传 dt 启动")
@@ -3408,6 +3449,10 @@ def generate_tv_report(summary, fuyan_results):
             if task.get('repair_mode') == 'complement_data' and task.get('complement_start'):
                 report_lines.append(
                     f"    修复方式: 补数 {task['complement_start']} ~ {task['complement_end']}（不传dt）"
+                )
+            elif task.get('repair_mode') == 'complement_fallback_dt':
+                report_lines.append(
+                    f"    修复方式: 传dt {task.get('dt') or ''}（该国DS补数启动失败，已自动回退；如需补数请为该工作流配置定时）"
                 )
             if task.get('instance_id'):
                 report_lines.append(f"    实例ID: {task['instance_id']}")

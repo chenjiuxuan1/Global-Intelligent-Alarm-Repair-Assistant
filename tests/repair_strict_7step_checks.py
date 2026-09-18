@@ -4166,5 +4166,113 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertIn("修复方式: 补数 2026-09-11 00:00:00 ~ 2026-09-11 00:00:00（不传dt）", report)
 
 
+    def test_build_complement_start_payload_variants_includes_ds34_date_list(self):
+        """DS 3.4 的补数需要 scheduleTime 为 JSON 串（complementScheduleDateList，逗号分隔日期）。"""
+        module = load_module()
+        variants = module.build_complement_start_payload_variants(
+            "2026-09-09 00:00:00", "2026-09-11 00:00:00"
+        )
+
+        self.assertEqual(len(variants), 3)
+        self.assertEqual(variants[0]["execType"], "COMPLEMENT_DATA")
+        self.assertNotIn("scheduleTime", variants[0])
+        self.assertEqual(variants[1]["scheduleTime"], "2026-09-09 00:00:00")
+
+        ds34 = json.loads(variants[2]["scheduleTime"])
+        self.assertEqual(variants[2]["execType"], "COMPLEMENT_DATA")
+        self.assertEqual(
+            ds34["complementScheduleDateList"],
+            "2026-09-09 00:00:00,2026-09-10 00:00:00,2026-09-11 00:00:00",
+        )
+        self.assertNotIn("complementStartDate", variants[2])
+
+    def test_step3_start_repair_falls_back_to_dt_when_complement_start_fails(self):
+        """补数启动失败（如巴基斯坦 DS3.4 无定时工作流）时，自动回退传 dt 启动并标记 repair_mode。"""
+        module = load_module()
+        module.AD_TABLE_PREFIXES = ("dwd_ad_",)
+        tasks = [
+            {
+                "table": "dwd_ad_fb_ad_insight_impression_age_gender",
+                "dt": "2026-09-17",
+                "workflow_code": "wf-ad",
+                "workflow_name": "巴基斯坦-投放平台-DWD_AD",
+                "task_code": "task-ad",
+                "task_name": "dwd_ad_fb_ad_insight_impression_age_gender",
+                "task_flag": "YES",
+                "project_code": "ad-proj",
+                "project_name": "巴基斯坦-投放平台",
+                "repair_mode": "complement_data",
+                "complement_start": "2026-09-18 00:00:00",
+                "complement_end": "2026-09-18 00:00:00",
+            }
+        ]
+        attempts = []
+
+        def fake_ds_api_post(endpoint, data):
+            attempts.append((endpoint, dict(data)))
+            if data.get("execType") == "COMPLEMENT_DATA":
+                return False, {}, "Internal Server Error: Parse backfillTime: error"
+            return True, {"data": [777000]}, ""
+
+        with mock.patch.object(module, "ds_api_post", side_effect=fake_ds_api_post), \
+            mock.patch.object(module, "get_running_instances_by_workflow", return_value=[]), \
+            mock.patch.object(module, "log"), \
+            mock.patch("time.sleep"):
+            results, running_instances = module.step3_start_repair(tasks)
+
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(results[0]["instance_id"], 777000)
+        self.assertEqual(results[0]["repair_mode"], "complement_fallback_dt")
+        self.assertEqual(running_instances[0]["project_code"], "ad-proj")
+
+        # 补数尝试应覆盖 DS3.4 的日期列表变体
+        complement_payloads = [p for _, p in attempts if p.get("execType") == "COMPLEMENT_DATA"]
+        self.assertTrue(complement_payloads)
+        self.assertTrue(
+            any("complementScheduleDateList" in str(p.get("scheduleTime", "")) for p in complement_payloads)
+        )
+
+        # 回退启动：仍在投放平台项目内、START_PROCESS、携带 dt
+        start_payloads = [(ep, p) for ep, p in attempts if p.get("execType") == "START_PROCESS"]
+        self.assertEqual(len(start_payloads), 1)
+        endpoint, payload = start_payloads[0]
+        self.assertIn("/projects/ad-proj/executors/", endpoint)
+        self.assertEqual(json.loads(payload["startParams"])["dt"], "2026-09-17")
+        self.assertEqual(payload["startNodeList"], "task-ad")
+
+    def test_generate_tv_report_shows_complement_fallback_mode_for_rerun_tasks(self):
+        module = load_module()
+        summary = {
+            "initial_alert_count": 1,
+            "resolved_count": 0,
+            "remaining_count": 0,
+            "manual_review_count": 0,
+            "running_count": 0,
+            "display_pending_tables_count": 0,
+            "rerun_tasks": [
+                {
+                    "table": "dwd_ad_fb_ad_insight_impression_age_gender",
+                    "workflow_name": "巴基斯坦-投放平台-DWD_AD",
+                    "project_code": "ad-proj",
+                    "project_name": "巴基斯坦-投放平台",
+                    "repair_mode": "complement_fallback_dt",
+                    "dt": "2026-09-17",
+                    "instance_id": 777000,
+                    "end_time": "2026-09-18 14:30:00",
+                }
+            ],
+            "resolved_tasks": [],
+            "remaining_tasks": [],
+            "running_tasks": [],
+            "post_fuyan_remaining_tables": set(),
+        }
+
+        with mock.patch.object(module, "log"):
+            report = module.generate_tv_report(summary, [])
+
+        self.assertIn("巴基斯坦-投放平台-DWD_AD（项目: 巴基斯坦-投放平台）", report)
+        self.assertIn("修复方式: 传dt 2026-09-17（该国DS补数启动失败，已自动回退", report)
+
+
 if __name__ == "__main__":
     unittest.main()
