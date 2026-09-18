@@ -577,8 +577,94 @@ def get_workflow_definition_list(project_code=None):
             result = (True, {'totalList': merged_total_list}, '')
             break
 
+def _shorten_failure_text(text, limit=80):
+    """压缩失败原因文本，避免报告被超长 HTML/响应体占满。"""
+    text = str(text or '').replace('\n', ' ').strip()
+    return text[:limit] + ('…' if len(text) > limit else '')
+
+
+def get_workflow_definition_list(project_code=None):
+    """兼容 DS 3.3 workflow-definition 与 DS 3.2 process-definition 列表接口，并自动翻页"""
+    project_code = str(project_code or PROJECT_CODE)
+    cached = _PROJECT_WORKFLOW_LIST_CACHE.get(project_code)
+    if cached is not None:
+        return cached
+
+    endpoint_templates = _get_definition_list_endpoint_templates()
+    last_msg = ""
+    started_at = time.time()
+    endpoint_failures = []
+
+    def budget_exceeded():
+        return DS_WORKFLOW_LIST_MAX_SECONDS > 0 and (time.time() - started_at) >= DS_WORKFLOW_LIST_MAX_SECONDS
+
+    result = None
+    for endpoint_template in endpoint_templates:
+        if budget_exceeded():
+            result = (False, {}, f"获取工作流列表超过{DS_WORKFLOW_LIST_MAX_SECONDS}秒预算: {last_msg or 'timeout budget exceeded'}")
+            break
+
+        if "{page_no}" not in endpoint_template:
+            endpoint = endpoint_template.format(project_code=project_code)
+            success, data, msg = ds_api_get(endpoint)
+            if not success:
+                last_msg = msg
+                endpoint_failures.append(
+                    f"{_shorten_failure_text(endpoint.split('?')[0], 55)} → {_shorten_failure_text(msg)}"
+                )
+                continue
+
+            if isinstance(data, list) and data:
+                result = (True, {'totalList': data}, '')
+                break
+            if isinstance(data, dict):
+                total_list = data.get('totalList', [])
+                if total_list:
+                    result = (True, {'totalList': total_list}, '')
+                    break
+            endpoint_failures.append(
+                f"{_shorten_failure_text(endpoint.split('?')[0], 55)} → 返回成功但无工作流数据"
+            )
+            continue
+
+        page_no = 1
+        total_pages = 1
+        merged_total_list = []
+        endpoint_page_failures = []
+
+        while page_no <= total_pages:
+            if budget_exceeded():
+                merged_total_list = []
+                break
+            endpoint = endpoint_template.format(project_code=project_code, page_no=page_no)
+            success, data, msg = ds_api_get(endpoint)
+            if not success:
+                last_msg = msg
+                merged_total_list = []
+                endpoint_page_failures.append(_shorten_failure_text(msg))
+                break
+
+            if isinstance(data, list):
+                merged_total_list.extend(data)
+                break
+
+            merged_total_list.extend(data.get('totalList', []))
+            total_pages = data.get('totalPage') or 1
+            page_no += 1
+
+        if endpoint_page_failures:
+            endpoint_failures.append(
+                f"{_shorten_failure_text(endpoint.split('?')[0], 55)} → {'; '.join(endpoint_page_failures)}"
+            )
+
+        if merged_total_list:
+            result = (True, {'totalList': merged_total_list}, '')
+            break
+
     if result is None:
-        result = (False, {}, last_msg)
+        # 失败时附带每个端点的尝试明细，便于区分“DS服务不可用/返回HTML/参数不兼容”等场景
+        detail = ' | '.join(endpoint_failures)
+        result = (False, {}, f"{last_msg or 'unknown error'}" + (f" [尝试明细] {detail}" if detail else ""))
 
     if result[0]:
         # 只缓存成功结果，失败允许下次重试，避免一次抖动导致整个运行周期找不到工作流。

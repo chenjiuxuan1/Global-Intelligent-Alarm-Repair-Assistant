@@ -3383,6 +3383,27 @@ class RepairStrict7StepTests(unittest.TestCase):
         self.assertEqual(results[0]["instance_id"], 98765)
         self.assertEqual(running_instances[0]["instance_id"], 98765)
 
+    def test_get_workflow_definition_list_failure_includes_per_endpoint_detail(self):
+        """列表失败时，消息需包含每个端点的失败明细，便于区分 DS 不可用/返回HTML 等场景。"""
+        module = load_module()
+
+        def fake_ds_api_get(endpoint):
+            if "workflow-definition?pageNo=" in endpoint:
+                return False, {}, "invalid json response: content-type=text/html; body=<!-- license..."
+            if "process-definition?pageNo=" in endpoint:
+                return False, {}, "<urlopen error timed out>"
+            return False, {}, "not found"
+
+        with mock.patch.object(module, "ds_api_get", side_effect=fake_ds_api_get):
+            success, data, msg = module.get_workflow_definition_list()
+
+        self.assertFalse(success)
+        self.assertIn("[尝试明细]", msg)
+        self.assertIn("workflow-definition → invalid json response", msg)
+        self.assertIn("process-definition → <urlopen error timed out>", msg)
+        # 明细做截断，避免报告被超长响应体占满
+        self.assertTrue(all(len(part) < 400 for part in msg.split(" | ")))
+
     def test_get_workflow_definition_list_falls_back_to_query_process_definition_list(self):
         module = load_module()
 
