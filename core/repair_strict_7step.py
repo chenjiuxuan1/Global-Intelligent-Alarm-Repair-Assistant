@@ -57,8 +57,8 @@ BLOCKED_FUYAN_WORKFLOW_NAMES = {
     for name in (REPAIR_CONFIG.get('blocked_fuyan_workflow_names') or [])
     if str(name).strip()
 }
-# 投放相关表（dwd_ad_/dwd_tt_/dwd_fb_/dwd_gg_ 等前缀）走各国“投放平台”项目，
-# 修复方式为补数（COMPLEMENT_DATA）而非传 dt。
+# 投放相关表（dwd_ad_/dwd_tt_/dwd_fb_/dwd_gg_ 等前缀）优先在各国“投放平台”项目中
+# 搜索修复节点；启动方式与其余表一致，统一传 dt（START_PROCESS），不使用补数。
 AD_TABLE_PREFIXES = tuple(
     str(prefix).strip().lower()
     for prefix in (REPAIR_CONFIG.get('ad_table_prefixes') or [])
@@ -91,8 +91,6 @@ def _resolve_current_country():
 
 
 APP_COUNTRY = _resolve_current_country()
-AD_COMPLEMENT_SCHEDULE_OFFSET_DAYS = int(REPAIR_CONFIG.get('ad_complement_schedule_offset_days', 1))
-AD_COMPLEMENT_MAX_DAYS = int(REPAIR_CONFIG.get('ad_complement_max_days', 10))
 _AD_PLATFORM_PROJECTS_CACHE = None
 _PROJECT_WORKFLOW_LIST_CACHE = {}
 _PROJECT_SCHEDULE_MAP_CACHE = {}
@@ -373,119 +371,6 @@ def start_workflow_instance_with_fallbacks(project_code, workflow_code, base_dat
             break
 
     return success, result, msg, used_endpoint, used_payload, launched_at
-
-
-def _enumerate_daily_schedule_dates(complement_start, complement_end):
-    """按天枚举 [complement_start, complement_end] 的调度日期（含两端），供 DS 3.4 手工补数列表使用。"""
-    try:
-        start_day = datetime.strptime(str(complement_start)[:10], '%Y-%m-%d')
-        end_day = datetime.strptime(str(complement_end)[:10], '%Y-%m-%d')
-    except (ValueError, TypeError):
-        return []
-    if end_day < start_day:
-        start_day, end_day = end_day, start_day
-    dates = []
-    current = start_day
-    while current <= end_day and len(dates) <= max(int(AD_COMPLEMENT_MAX_DAYS or 0), 1):
-        dates.append(current.strftime('%Y-%m-%d 00:00:00'))
-        current += timedelta(days=1)
-    return dates
-
-
-def build_complement_start_payload_variants(complement_start, complement_end):
-    """兼容不同 DS 版本的补数启动参数。
-
-    - 变体0: DS 3.2/3.3 旧接口 start-process-instance，顶层 complementStartDate/complementEndDate；
-    - 变体1: 更老版本只有 scheduleTime（单日补数）；
-    - 变体2: DS 3.4 新接口 start-workflow-instance，scheduleTime 为 JSON 字符串
-      {"complementScheduleDateList":"2026-01-01 00:00:00,2026-01-02 00:00:00"}（手工指定调度日期列表，
-      无需工作流配置定时；范围字段在 3.4 中不生效，scheduleTime 是必填参数且按 backfillTime 解析）。
-    """
-    variants = [
-        {
-            'execType': 'COMPLEMENT_DATA',
-            'complementStartDate': complement_start,
-            'complementEndDate': complement_end,
-        },
-        {
-            'execType': 'COMPLEMENT_DATA',
-            'scheduleTime': complement_start,
-        },
-    ]
-    ds34_dates = _enumerate_daily_schedule_dates(complement_start, complement_end)
-    if ds34_dates:
-        variants.append({
-            'execType': 'COMPLEMENT_DATA',
-            'scheduleTime': json.dumps(
-                {'complementScheduleDateList': ','.join(ds34_dates)},
-                separators=(',', ':'),
-            ),
-        })
-    return variants
-
-
-def should_retry_with_schedule_time_complement(message):
-    """老版本 DS 不识别 complementStart/EndDate 时，回退为 scheduleTime 单日补数。"""
-    text = str(message or '').lower()
-    return (
-        'complement' in text
-        or 'scheduletime' in text.replace(' ', '').replace('_', '')
-        or 'schedule time' in text
-        or '调度时间' in str(message or '')
-        or '补数' in str(message or '')
-    )
-
-
-def start_workflow_complement_with_fallbacks(
-    project_code, workflow_code, base_data, complement_start, complement_end, table=''
-):
-    """以补数（COMPLEMENT_DATA）方式启动投放平台工作流，不传 dt 启动参数。"""
-    start_attempts = _get_start_attempts()
-    payload_variants = build_complement_start_payload_variants(complement_start, complement_end)
-    success = False
-    result = {}
-    msg = ''
-    used_endpoint = ''
-    used_payload = {}
-    launched_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-    for start_endpoint, code_field in start_attempts:
-        for index, variant in enumerate(payload_variants):
-            attempt_data = dict(base_data)
-            attempt_data.update(variant)
-            attempt_data[code_field] = workflow_code
-            if 'scheduleTime' not in variant:
-                attempt_data['scheduleTime'] = launched_at if start_endpoint == 'start-workflow-instance' else ''
-            used_endpoint = f"/projects/{project_code}/executors/{start_endpoint}"
-            used_payload = attempt_data
-            debug_log(
-                f"尝试补数启动 table={table or workflow_code} endpoint={used_endpoint} "
-                f"code_field={code_field} variant_index={index} "
-                f"range={complement_start} ~ {complement_end}"
-            )
-            success, result, msg = ds_api_post(used_endpoint, attempt_data)
-            if success:
-                extracted_instance_id = _extract_instance_id_from_start_result(result)
-                if extracted_instance_id not in (None, ''):
-                    return True, result, msg, used_endpoint, used_payload, launched_at
-                debug_log(
-                    f"补数启动接口返回成功但无实例ID table={table or workflow_code} "
-                    f"endpoint={used_endpoint} raw_data={result.get('data')!r}"
-                )
-                success = False
-                result = {}
-                msg = '补数启动接口返回成功但未提供实例ID'
-            else:
-                debug_log(
-                    f"补数启动失败 table={table or workflow_code} endpoint={used_endpoint} "
-                    f"variant={index} msg={msg or result.get('msg', '')}"
-                )
-            # 各版本 DS 的报错形态差异很大（405/缺参数/backfillTime解析失败等），
-            # 统一遍历全部 端点×参数变体，直到某个组合成功为止；失败的启动不会产生实例，无副作用。
-            continue
-
-    return success, result, msg, used_endpoint, used_payload, launched_at
-
 
 def _get_instance_state_types_for_search(include_all=False):
     """根据接口风格选择可查询的状态枚举，避开已知不兼容口径。"""
@@ -1609,49 +1494,6 @@ def resolve_alert_dt(row, now=None):
 
     return now.strftime('%Y-%m-%d')
 
-
-def resolve_complement_schedule_range(begin, end, offset_days=None, max_days=None):
-    """根据质量校验时间窗计算投放表补数的调度时间范围。
-
-    校验窗口 [begin, end] 覆盖的 dt 分区为 [begin_date, end_date-1]（与
-    resolve_alert_dt / get_alert_window_status 的口径一致）。投放平台工作流按天
-    调度，默认 D-1 口径（调度日期 D 补 dt=D-1 分区），因此补数调度范围取
-    [begin_date+offset, max(end_date, begin_date+offset)]；当天调度的工作流把
-    AD_COMPLEMENT_SCHEDULE_OFFSET_DAYS 配为 0 即可。
-
-    返回 (start_text, end_text)，格式 'YYYY-MM-DD HH:MM:SS'；无法解析窗口时返回 (None, None)。
-    """
-    if offset_days is None:
-        offset_days = AD_COMPLEMENT_SCHEDULE_OFFSET_DAYS
-    if max_days is None:
-        max_days = AD_COMPLEMENT_MAX_DAYS
-
-    begin_time = normalize_to_datetime(begin)
-    end_time = normalize_to_datetime(end)
-    if begin_time is None and end_time is None:
-        return None, None
-
-    if begin_time is None:
-        begin_time = end_time - timedelta(days=1)
-    if end_time is None:
-        end_time = begin_time
-
-    start_date = begin_time.date() + timedelta(days=max(offset_days, 0))
-    end_date = max(end_time.date(), start_date)
-
-    if max_days > 0 and (end_date - start_date).days + 1 > max_days:
-        log(
-            f"⚠️ 投放表补数范围 {start_date} ~ {end_date} 超过上限 {max_days} 天，"
-            f"截断为 {start_date} ~ {start_date + timedelta(days=max_days - 1)}"
-        )
-        end_date = start_date + timedelta(days=max_days - 1)
-
-    return (
-        start_date.strftime('%Y-%m-%d %H:%M:%S'),
-        end_date.strftime('%Y-%m-%d %H:%M:%S'),
-    )
-
-
 def get_alert_window_status(row, now=None, lookback_days=None):
     """根据告警窗口跨度判断是否超出自动修复范围。"""
     if now is None:
@@ -1811,9 +1653,6 @@ def step1_scan_alerts(now=None):
                 
                 dt = resolve_alert_dt(row, now=now)
                 window_status = get_alert_window_status(row, now=now)
-                complement_start, complement_end = resolve_complement_schedule_range(
-                    row.get('begin'), row.get('end')
-                )
                 alert = {
                     'id': row['id'],
                     'table': table_name,
@@ -1824,8 +1663,6 @@ def step1_scan_alerts(now=None):
                     'name': row.get('name', ''),
                     'diff': row.get('diff', ''),
                     'is_ad_platform_table': is_ad_platform_table(table_name),
-                    'complement_start': complement_start,
-                    'complement_end': complement_end,
                 }
                 if window_status['is_out_of_window']:
                     begin_text = window_status.get('begin_date') or '未知'
@@ -2109,9 +1946,6 @@ def step2_find_locations(alerts):
                 'task_name': '',
                 'task_flag': '',
                 'project_code': PROJECT_CODE,
-                'repair_mode': '',
-                'complement_start': None,
-                'complement_end': None,
                 'status': 'skipped_out_of_window',
                 'error': alert.get('error', ''),
             }
@@ -2257,20 +2091,6 @@ def step2_find_locations(alerts):
         
         if location:
             task_project_code, task_project_name = location_project or (PROJECT_CODE, '')
-            # 只有命中投放平台项目时才走补数模式；主项目命中保持原有传 dt 方式。
-            if task_project_code != str(PROJECT_CODE):
-                repair_mode = 'complement_data'
-                complement_start = alert.get('complement_start')
-                complement_end = alert.get('complement_end')
-                if not complement_start or not complement_end:
-                    log("  ⚠️ 告警缺少校验时间窗，无法补数，回退为传 dt 启动")
-                    repair_mode = 'dt_param'
-                    complement_start = None
-                    complement_end = None
-            else:
-                repair_mode = 'dt_param'
-                complement_start = None
-                complement_end = None
 
             task = {
                 'alert_id': alert['id'],
@@ -2287,15 +2107,8 @@ def step2_find_locations(alerts):
                 'task_flag': location.get('task_flag', 'YES'),
                 'project_code': task_project_code,
                 'project_name': task_project_name or '主项目',
-                'repair_mode': repair_mode,
-                'complement_start': complement_start,
-                'complement_end': complement_end,
             }
             log(f"  ✅ {location['workflow_name']} -> {location['task_name']}")
-            if repair_mode == 'complement_data':
-                log(
-                    f"  🧮 投放表补数模式: 补数调度时间 {complement_start} ~ {complement_end}（不传 dt）"
-                )
             found_count += 1
         elif scheduled_location:
             error_msg = build_scheduled_parent_only_error(scheduled_location)
@@ -2314,9 +2127,6 @@ def step2_find_locations(alerts):
                 'task_flag': scheduled_location.get('task_flag', ''),
                 'project_code': PROJECT_CODE,
                 'project_name': '主项目',
-                'repair_mode': '',
-                'complement_start': None,
-                'complement_end': None,
                 'error': error_msg,
             }
             log(f"  ⏭️ {error_msg}")
@@ -2337,9 +2147,6 @@ def step2_find_locations(alerts):
                 'task_flag': blocked_location.get('task_flag', ''),
                 'project_code': PROJECT_CODE,
                 'project_name': '主项目',
-                'repair_mode': '',
-                'complement_start': None,
-                'complement_end': None,
                 'error': error_msg,
             }
             log(f"  ⏭️ {error_msg}")
@@ -2360,9 +2167,6 @@ def step2_find_locations(alerts):
                 'task_flag': forbidden_location.get('task_flag', ''),
                 'project_code': PROJECT_CODE,
                 'project_name': '主项目',
-                'repair_mode': '',
-                'complement_start': None,
-                'complement_end': None,
                 'error': error_msg,
             }
             log(f"  ⏭️ {error_msg}")
@@ -2387,9 +2191,6 @@ def step2_find_locations(alerts):
                 'task_flag': '',
                 'project_code': PROJECT_CODE,
                 'project_name': '主项目',
-                'repair_mode': '',
-                'complement_start': None,
-                'complement_end': None,
                 'error': error_msg,
             }
             log(f"  ❌ {error_msg}")
@@ -2723,44 +2524,9 @@ def step3_start_repair(tasks):
             'tenantCode': DS_TENANT_CODE,
             'dryRun': 0,
         }
-        complement_start = task.get('complement_start')
-        complement_end = task.get('complement_end')
-        # 双重保险：仅当“投放相关表 + 命中投放平台项目 + 补数范围完整”时才用补数；
-        # 其余一律保持原有传 dt 的修复方式。
-        use_complement = (
-            task.get('repair_mode') == 'complement_data'
-            and bool(complement_start)
-            and bool(complement_end)
-            and project_code != str(PROJECT_CODE)
-            and is_ad_platform_table(table)
-        )
-        if use_complement:
-            log(f"  🧮 补数模式: 调度时间范围 {complement_start} ~ {complement_end}（不传 dt）")
-            success, result, msg, used_endpoint, used_payload, launched_at = start_workflow_complement_with_fallbacks(
-                project_code,
-                workflow_code,
-                base_data,
-                complement_start,
-                complement_end,
-                table=table,
-            )
-            if not success:
-                # 兜底：个别国家 DS（如巴基斯坦 3.4）对未配置定时的工作流无法补数启动，
-                # 回退为在投放平台项目内传 dt 启动，保证修复链路不中断；报告中会注明实际修复方式。
-                fallback_error = result.get('msg', msg or '未知错误')
-                log(f"  ⚠️ 补数启动失败({fallback_error})，自动回退为传 dt 启动（仍在投放平台项目内）")
-                task['repair_mode'] = 'complement_fallback_dt'
-                success, result, msg, used_endpoint, used_payload, launched_at = start_workflow_instance_with_fallbacks(
-                    project_code,
-                    workflow_code,
-                    base_data,
-                    dt=dt,
-                    table=table,
-                )
-        else:
-            if task.get('repair_mode') == 'complement_data' and not use_complement:
-                log("  ⚠️ 不满足补数条件（非投放表/主项目命中/补数范围缺失），回退为传 dt 启动")
-            success, result, msg, used_endpoint, used_payload, launched_at = start_workflow_instance_with_fallbacks(
+        # 统一走普通 START_PROCESS + 传 dt 修复（投放平台项目命中的表同样按此方式，
+        # 已验证 startParams dt 可正常传入任务并按指定分区执行）。
+        success, result, msg, used_endpoint, used_payload, launched_at = start_workflow_instance_with_fallbacks(
                 project_code,
                 workflow_code,
                 base_data,
@@ -3446,14 +3212,6 @@ def generate_tv_report(summary, fuyan_results):
                 if task.get('project_code') and task.get('project_code') != PROJECT_CODE:
                     project_label = f"（项目: {task.get('project_name') or task.get('project_code')}）"
                 report_lines.append(f"    工作流: {task['workflow_name']}{project_label}")
-            if task.get('repair_mode') == 'complement_data' and task.get('complement_start'):
-                report_lines.append(
-                    f"    修复方式: 补数 {task['complement_start']} ~ {task['complement_end']}（不传dt）"
-                )
-            elif task.get('repair_mode') == 'complement_fallback_dt':
-                report_lines.append(
-                    f"    修复方式: 传dt {task.get('dt') or ''}（该国DS补数启动失败，已自动回退；如需补数请为该工作流配置定时）"
-                )
             if task.get('instance_id'):
                 report_lines.append(f"    实例ID: {task['instance_id']}")
             if task.get('end_time'):
