@@ -206,6 +206,61 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+# 查 DS 令牌的助手由 DS Token 映射工作流部署在各国跳板机，路径 6 国一致。
+DS_TOKEN_HELPER_CANDIDATES = (
+    Path("/tmp/KN-YCGJ-TZ-governance-automation/alert-sql-notification/"
+         "governance-automation/remote_scripts/ds_match_candidate_query.py"),
+    Path("/root/KN-YCGJ-TZ/alert-sql-notification/"
+         "governance-automation/remote_scripts/ds_match_candidate_query.py"),
+)
+
+
+def resolve_live_ds_token(country: str, user: str = "") -> str:
+    """实时查本机 DS 库取令牌，取代写死在调度工作流里的固定值。
+
+    令牌按 DS 实例隔离，被轮换后写死的值会静默失效（401），而告警链路只会在
+    后台日志里看到失败。这里直接查 t_ds_access_token，取不到就返回空串，由
+    调用方继续回退到 ``$DS_TOKEN``，保证不会因为查令牌失败而丢掉告警。
+    """
+    user = (user or os.getenv("DS_FAILED_TOKEN_USER", "") or "jiangchuanchen").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.@-]+", user):
+        return ""
+    script = next((path for path in DS_TOKEN_HELPER_CANDIDATES if path.is_file()), None)
+    if script is None:
+        return ""
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("ds_match_candidate_query", script)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        probe = argparse.Namespace(
+            ds_db_host="", ds_db_port="", ds_db_user="", ds_db_password="", ds_db_name=""
+        )
+        try:
+            connection = module.discover_ds_mysql_connection(probe, module.read_process_env(module.find_ds_pid()))
+        except Exception:
+            connection = module.configured_ds_mysql_connection(country)
+        if not connection:
+            return ""
+        sql = (
+            "SELECT a.token FROM t_ds_access_token a "
+            "JOIN t_ds_user u ON u.id = a.user_id "
+            f"WHERE u.user_name = '{user}' AND a.token IS NOT NULL AND a.token <> ''"
+        )
+        rows = module.query_mysql_rows(connection, sql) or []
+    except Exception:
+        return ""
+    for row in rows:
+        token = str(row.get("token") or "") if isinstance(row, dict) else (
+            str(row[0]) if isinstance(row, (list, tuple)) and row else ""
+        )
+        if token:
+            return token.strip()
+    return ""
+
+
 def _decode_payload(payload_b64: str) -> Any:
     decoded = base64.b64decode(payload_b64).decode("utf-8")
     return json.loads(decoded)
@@ -1892,7 +1947,14 @@ def main(argv: list[str] | None = None) -> int:
     raw = _decode_payload(args.payload_b64)
     country = normalize_country(args.country)
     alert = normalize_alert_payload(raw, country=country)
-    ds_token = args.ds_token.strip() or alert.get("ds_token") or os.getenv("DS_TOKEN", "")
+    ds_token = (
+        args.ds_token.strip()
+        or alert.get("ds_token")
+        # 优先实时查本机 DS 库：写死在调度侧的令牌一旦被轮换就会静默 401。
+        # 查不到就回退到 $DS_TOKEN，保持既有行为不变。
+        or resolve_live_ds_token(country)
+        or os.getenv("DS_TOKEN", "")
+    )
     state_file = Path(args.state_file) if args.state_file else default_state_file(country)
 
     with retry_lock(state_file, alert["retry_key"]) as acquired:
